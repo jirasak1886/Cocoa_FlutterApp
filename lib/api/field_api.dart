@@ -1,5 +1,5 @@
 // field_api_service.dart (aligned with routes/field_zone.py)
-import 'package:cocoa_app/auth_api.dart';
+import 'package:cocoa_app/api/auth_api.dart';
 import 'api_server.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';

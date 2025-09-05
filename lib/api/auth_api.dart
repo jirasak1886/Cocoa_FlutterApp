@@ -1,5 +1,5 @@
 // auth_api.dart
-import 'package:cocoa_app/api_server.dart';
+import 'package:cocoa_app/api/api_server.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -386,6 +386,74 @@ class AuthApiService {
         'authenticated': false,
         'message': 'เกิดข้อผิดพลาดในการเชื่อมต่อ',
       };
+    }
+  }
+  // เพิ่มเมธอดนี้ในคลาส AuthApiService
+
+  static Future<Map<String, dynamic>> updateProfile({
+    String? name,
+    String? userTel,
+    String? username,
+  }) async {
+    try {
+      final payload = <String, dynamic>{
+        if (name != null) 'name': name,
+        if (userTel != null) 'user_tel': userTel,
+        if (username != null) 'username': username,
+      };
+
+      final r = await http.put(
+        Uri.parse('${ApiServer.currentBaseUrl}/api/auth/profile'),
+        headers: ApiServer.defaultHeaders,
+        body: jsonEncode(payload),
+      );
+
+      final body = ApiServer.handleResponse(r);
+      return body;
+    } catch (e) {
+      return ApiServer.handleError(e);
+    }
+  }
+
+  static Future<Map<String, dynamic>> changePassword({
+    required String currentPassword,
+    required String newPassword,
+    String? confirmPassword,
+  }) async {
+    final payload = <String, dynamic>{
+      'current_password': currentPassword,
+      'new_password': newPassword,
+      // ถ้าไม่ได้ส่งมาก็เท่ากับ newPassword ให้เลย เพื่อให้ผ่านฝั่งเซิร์ฟเวอร์
+      'confirm_password': confirmPassword ?? newPassword,
+    };
+
+    try {
+      // ยิงเส้นทางหลักก่อน
+      var resp = await http
+          .put(
+            Uri.parse('${ApiServer.currentBaseUrl}/api/auth/profile/password'),
+            headers: ApiServer.defaultHeaders,
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      var body = ApiServer.handleResponse(resp);
+
+      // ถ้ายังไม่พบ endpoint (404) หรือฝั่งเซิร์ฟเวอร์ตอบ not_found ให้ fallback ไป alias เดิม
+      if (resp.statusCode == 404 || body['error'] == 'not_found') {
+        resp = await http
+            .put(
+              Uri.parse('${ApiServer.currentBaseUrl}/api/auth/change-password'),
+              headers: ApiServer.defaultHeaders,
+              body: jsonEncode(payload),
+            )
+            .timeout(const Duration(seconds: 30));
+        body = ApiServer.handleResponse(resp);
+      }
+
+      return body;
+    } catch (e) {
+      return ApiServer.handleError(e);
     }
   }
 

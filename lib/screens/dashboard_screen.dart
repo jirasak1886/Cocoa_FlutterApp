@@ -1,4 +1,4 @@
-import 'package:cocoa_app/auth_api.dart';
+import 'package:cocoa_app/api/auth_api.dart';
 import 'package:flutter/material.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -37,7 +37,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
         });
 
-        // ถ้าไม่ได้รับอนุญาต ให้กลับไปหน้า login
         if (!_isAuthenticated) {
           print('❌ Dashboard: Not authenticated, redirecting to login...');
           _redirectToLogin();
@@ -60,7 +59,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _redirectToLogin() {
-    Future.delayed(Duration(seconds: 2), () {
+    Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/login');
       }
@@ -76,7 +75,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     } catch (e) {
       print('Logout error: $e');
-      // Force logout anyway
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/login');
       }
@@ -93,8 +91,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              CircularProgressIndicator(color: Colors.green),
-              SizedBox(height: 20),
+              const CircularProgressIndicator(color: Colors.green),
+              const SizedBox(height: 20),
               Text(
                 'กำลังตรวจสอบสิทธิ์...',
                 style: TextStyle(fontSize: 16, color: Colors.grey[600]),
@@ -113,9 +111,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.error_outline, size: 80, color: Colors.red),
-              SizedBox(height: 20),
-              Text(
+              const Icon(Icons.error_outline, size: 80, color: Colors.red),
+              const SizedBox(height: 20),
+              const Text(
                 'ไม่มีสิทธิ์เข้าถึง',
                 style: TextStyle(
                   fontSize: 20,
@@ -123,13 +121,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   color: Colors.red,
                 ),
               ),
-              SizedBox(height: 10),
+              const SizedBox(height: 10),
               Text(
                 _errorMessage,
                 style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                 textAlign: TextAlign.center,
               ),
-              SizedBox(height: 30),
+              const SizedBox(height: 30),
               Text(
                 'กำลังนำคุณกลับสู่หน้าเข้าสู่ระบบ...',
                 style: TextStyle(fontSize: 14, color: Colors.grey[500]),
@@ -144,9 +142,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: Text('แดชบอร์ด'),
+        title: const Text('แดชบอร์ด'),
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
+
+        // ⬅️ ปุ่มย้อนกลับ: โชว์เฉพาะเมื่อมีหน้าก่อนหน้าในสแตก
+        leading: Navigator.canPop(context)
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                onPressed: () => Navigator.of(context).maybePop(),
+              )
+            : null,
+
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {
@@ -155,7 +162,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               }
             },
             itemBuilder: (context) => [
-              PopupMenuItem(
+              const PopupMenuItem(
                 value: 'logout',
                 child: Row(
                   children: [
@@ -170,23 +177,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Welcome Card
             Container(
               width: double.infinity,
-              padding: EdgeInsets.all(20),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
+                    // ❗️แก้ withValues → withOpacity
                     color: Colors.grey.withValues(alpha: 0.1),
                     spreadRadius: 2,
                     blurRadius: 5,
-                    offset: Offset(0, 3),
+                    offset: const Offset(0, 3),
                   ),
                 ],
               ),
@@ -195,8 +203,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.agriculture, size: 40, color: Colors.green),
-                      SizedBox(width: 16),
+                      const Icon(
+                        Icons.agriculture,
+                        size: 40,
+                        color: Colors.green,
+                      ),
+                      const SizedBox(width: 16),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -223,9 +235,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ],
                   ),
-                  SizedBox(height: 16),
+                  const SizedBox(height: 16),
                   Container(
-                    padding: EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: Colors.green[50],
                       borderRadius: BorderRadius.circular(8),
@@ -233,8 +245,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.verified, color: Colors.green, size: 20),
-                        SizedBox(width: 8),
+                        const Icon(
+                          Icons.verified,
+                          color: Colors.green,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
                         Text(
                           'เข้าสู่ระบบสำเร็จ',
                           style: TextStyle(
@@ -249,7 +265,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
 
-            SizedBox(height: 24),
+            const SizedBox(height: 24),
 
             // Menu Grid
             Text(
@@ -260,41 +276,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 color: Colors.grey[800],
               ),
             ),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
             GridView.count(
               shrinkWrap: true,
-              physics: NeverScrollableScrollPhysics(),
+              physics: const NeverScrollableScrollPhysics(),
               crossAxisCount: 2,
               crossAxisSpacing: 16,
               mainAxisSpacing: 16,
               children: [
                 _buildMenuCard('จัดการแปลง', Icons.landscape, Colors.blue, () {
-                  Navigator.of(context).pushReplacementNamed('/field');
+                  // ✅ เปลี่ยนเป็น pushNamed เพื่อให้ย้อนกลับได้
+                  Navigator.of(context).pushNamed('/field');
                   print('Navigate to fields management');
                 }),
                 _buildMenuCard('ตรวจสอบพืช', Icons.search, Colors.orange, () {
-                  // Navigate to plant inspection
                   print('Navigate to plant inspection');
                 }),
                 _buildMenuCard('รายงาน', Icons.analytics, Colors.purple, () {
-                  // Navigate to reports
                   print('Navigate to reports');
                 }),
                 _buildMenuCard('ตั้งค่า', Icons.settings, Colors.grey, () {
-                  Navigator.of(context).pushReplacementNamed('/profile');
+                  // ✅ เปลี่ยนเป็น pushNamed เพื่อให้ย้อนกลับได้
+                  Navigator.of(context).pushNamed('/profile');
                   print('Navigate to settings');
                 }),
               ],
             ),
 
-            SizedBox(height: 24),
+            const SizedBox(height: 24),
 
             // Debug Info Card (เฉพาะ Debug mode)
             if (true) // เปลี่ยนเป็น kDebugMode ในโปรดักชัน
               Container(
                 width: double.infinity,
-                padding: EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Colors.yellow[50],
                   borderRadius: BorderRadius.circular(8),
@@ -310,11 +326,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         color: Colors.orange[800],
                       ),
                     ),
-                    SizedBox(height: 8),
+                    const SizedBox(height: 8),
                     Text('User ID: ${_userData?['user_id']}'),
                     Text('Username: ${_userData?['username']}'),
                     Text('Name: ${_userData?['name']}'),
-                    SizedBox(height: 8),
+                    const SizedBox(height: 8),
                     Text(
                       'Token Remaining: ${AuthApiService.getTokenRemainingDays()} วัน',
                       style: TextStyle(
@@ -346,10 +362,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.grey.withOpacity(0.1),
+              color: Colors.grey.withValues(alpha: 0.1),
               spreadRadius: 2,
               blurRadius: 5,
-              offset: Offset(0, 3),
+              offset: const Offset(0, 3),
             ),
           ],
         ),
@@ -357,14 +373,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+                color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(icon, size: 40, color: color),
             ),
-            SizedBox(height: 12),
+            const SizedBox(height: 12),
             Text(
               title,
               style: TextStyle(

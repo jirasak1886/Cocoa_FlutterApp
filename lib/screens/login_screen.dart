@@ -1,4 +1,4 @@
-import 'package:cocoa_app/auth_api.dart';
+import 'package:cocoa_app/api/auth_api.dart';
 import 'package:flutter/material.dart';
 
 class LoginScreen extends StatefulWidget {

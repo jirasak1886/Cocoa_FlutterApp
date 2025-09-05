@@ -1,7 +1,8 @@
-import 'package:cocoa_app/auth_api.dart';
+import 'package:cocoa_app/api/auth_api.dart';
 import 'package:cocoa_app/screens/area.dart';
 import 'package:cocoa_app/screens/login_screen.dart';
 import 'package:cocoa_app/screens/dashboard_screen.dart';
+import 'package:cocoa_app/screens/profile_edit_page.dart';
 import 'package:cocoa_app/screens/profile_page.dart';
 import 'package:flutter/material.dart';
 
@@ -32,6 +33,7 @@ class CocoaApp extends StatelessWidget {
         '/dashboard': (context) => DashboardScreen(),
         '/field': (context) => FieldManagement(),
         '/profile': (context) => ProfilePage(),
+        '/profile/edit': (context) => const ProfileEditPage(),
       },
       debugShowCheckedModeBanner: false,
     );
