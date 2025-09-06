@@ -417,8 +417,14 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
     try {
       setState(() => _gettingLoc = true);
       final p = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 15),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 0,
+          timeLimit: Duration(seconds: 15),
+        ),
+
+        // desiredAccuracy: LocationAccuracy.best,
+        // timeLimit: const Duration(seconds: 15),
       );
       setState(() {
         _gpsPoints.add({'lat': p.latitude, 'lng': p.longitude});

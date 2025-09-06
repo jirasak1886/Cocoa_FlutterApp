@@ -1,4 +1,5 @@
 // api_server.dart
+import 'package:cocoa_app/utils/variable.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
@@ -6,7 +7,7 @@ import 'package:flutter/foundation.dart';
 
 class ApiServer {
   // ======================== CONFIG =========================
-  static const String baseUrl = 'http://127.0.0.1:5000';
+  // static const String baseUrl = 'http://127.0.0.1:5000';
 
   static const List<String> alternativeUrls = [
     'http://127.0.0.1:5000',
