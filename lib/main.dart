@@ -1,5 +1,7 @@
 import 'package:cocoa_app/api/auth_api.dart';
 import 'package:cocoa_app/screens/area.dart';
+import 'package:cocoa_app/screens/inspection_history_page.dart';
+import 'package:cocoa_app/screens/inspection_page.dart';
 import 'package:cocoa_app/screens/login_screen.dart';
 import 'package:cocoa_app/screens/dashboard_screen.dart';
 import 'package:cocoa_app/screens/profile_edit_page.dart';
@@ -34,6 +36,8 @@ class CocoaApp extends StatelessWidget {
         '/field': (context) => FieldManagement(),
         '/profile': (context) => ProfilePage(),
         '/profile/edit': (context) => const ProfileEditPage(),
+        '/inspection': (context) => const InspectionPage(),
+        '/history': (context) => const InspectionHistoryPage(),
       },
       debugShowCheckedModeBanner: false,
     );

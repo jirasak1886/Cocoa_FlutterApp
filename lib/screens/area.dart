@@ -1,3 +1,4 @@
+// lib/screens/field_management.dart
 import 'package:cocoa_app/api/field_api.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
@@ -180,6 +181,7 @@ class _FieldManagementState extends State<FieldManagement> {
                         final zones = List.from(
                           filteredFields[index]['zones'] ?? [],
                         );
+                        final vc = (field['vertex_count'] ?? 0) as int;
 
                         return Card(
                           margin: const EdgeInsets.symmetric(
@@ -196,8 +198,7 @@ class _FieldManagementState extends State<FieldManagement> {
                             ),
                             title: Text(field['field_name']),
                             subtitle: Text(
-                              '${field['size_square_meter']} ตร.ม. • ${zones.length} โซน'
-                              '${(field['vertex_count'] ?? 0) > 0 ? ' • ${field['vertex_count']} จุด' : ''}',
+                              '${field['size_square_meter']} ตร.ม. • ${zones.length} โซน${vc > 0 ? ' • $vc จุด' : ''}',
                             ),
                             trailing: PopupMenuButton(
                               itemBuilder: (context) => const [
@@ -252,42 +253,19 @@ class _FieldManagementState extends State<FieldManagement> {
                                 }
                               },
                             ),
+                            // แสดงโซน + centroid lat/lng ของ marks
                             children: zones.map((zone) {
                               final safeZone = FieldApiService.safeZoneData(
                                 zone,
                               );
-                              return ListTile(
-                                leading: const Icon(
-                                  Icons.location_on,
-                                  color: Colors.orange,
+                              return _ZoneTile(
+                                zone: safeZone,
+                                onEdit: () => _showZoneForm(
+                                  field['field_id'],
+                                  field['field_name'],
+                                  zone,
                                 ),
-                                title: Text(safeZone['zone_name']),
-                                subtitle: Text('${safeZone['num_trees']} ต้น'),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.edit,
-                                        color: Colors.blue,
-                                        size: 20,
-                                      ),
-                                      onPressed: () => _showZoneForm(
-                                        field['field_id'],
-                                        field['field_name'],
-                                        zone,
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(
-                                        Icons.delete,
-                                        color: Colors.red,
-                                        size: 20,
-                                      ),
-                                      onPressed: () => _deleteZone(safeZone),
-                                    ),
-                                  ],
-                                ),
+                                onDelete: () => _deleteZone(safeZone),
                               );
                             }).toList(),
                           ),
@@ -302,6 +280,91 @@ class _FieldManagementState extends State<FieldManagement> {
         onPressed: () => _showFieldForm(),
         backgroundColor: Colors.green,
         child: const Icon(Icons.add, color: Colors.white),
+      ),
+    );
+  }
+}
+
+// ===== Zone list item with Lat/Lng (centroid of marks) =====
+class _ZoneTile extends StatefulWidget {
+  final Map<String, dynamic> zone;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  const _ZoneTile({
+    required this.zone,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  State<_ZoneTile> createState() => _ZoneTileState();
+}
+
+class _ZoneTileState extends State<_ZoneTile> {
+  bool _loading = true;
+  String? _latLngText; // "({lat}, {lng})" หรือ "ไม่มีพิกัด"
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMarksAndBuildLatLng();
+  }
+
+  Future<void> _loadMarksAndBuildLatLng() async {
+    try {
+      final res = await FieldApiService.getMarks(widget.zone['zone_id']);
+      if (res['success'] == true) {
+        final marks = List<Map<String, dynamic>>.from(res['data'] ?? []);
+        if (marks.isNotEmpty) {
+          double lat = 0, lng = 0;
+          for (final m in marks) {
+            lat += (m['latitude'] as num).toDouble();
+            lng += (m['longitude'] as num).toDouble();
+          }
+          lat /= marks.length;
+          lng /= marks.length;
+          _latLngText =
+              '(${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)})';
+        } else {
+          _latLngText = 'ไม่มีพิกัด';
+        }
+      } else {
+        _latLngText = 'ไม่มีพิกัด';
+      }
+    } catch (_) {
+      _latLngText = 'ไม่มีพิกัด';
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final z = widget.zone;
+    final subtitle = StringBuffer()..write('${z['num_trees']} ต้น');
+    if (_loading) {
+      subtitle.write(' • กำลังโหลดพิกัด…');
+    } else if (_latLngText != null) {
+      subtitle.write(' • $_latLngText');
+    }
+
+    return ListTile(
+      leading: const Icon(Icons.location_on, color: Colors.orange),
+      title: Text(z['zone_name']),
+      subtitle: Text(subtitle.toString()),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.edit, color: Colors.blue, size: 20),
+            onPressed: widget.onEdit,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete, color: Colors.red, size: 20),
+            onPressed: widget.onDelete,
+          ),
+        ],
       ),
     );
   }
@@ -330,8 +393,7 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
   bool _isLoading = false;
   bool _gettingLoc = false;
 
-  /// พิกัดหลายจุดของแปลง (จุด1, จุด2, …)
-  /// [{'lat': 13.7, 'lng': 100.5}, ...]
+  /// พิกัดหลายจุดของแปลง
   final List<Map<String, double>> _gpsPoints = [];
 
   @override
@@ -346,7 +408,6 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
   }
 
   Future<void> _loadExistingVertices(int fieldId) async {
-    // ดึงรายละเอียดแปลงเพื่อได้ vertices
     final res = await FieldApiService.getFieldDetails(fieldId);
     if (res['success'] == true && res['data'] != null) {
       final data = Map<String, dynamic>.from(res['data']);
@@ -417,18 +478,10 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
     try {
       setState(() => _gettingLoc = true);
       final p = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.best,
-          distanceFilter: 0,
-          timeLimit: Duration(seconds: 15),
-        ),
-
-        // desiredAccuracy: LocationAccuracy.best,
-        // timeLimit: const Duration(seconds: 15),
+        desiredAccuracy: LocationAccuracy.best,
       );
       setState(() {
         _gpsPoints.add({'lat': p.latitude, 'lng': p.longitude});
-        // อัปเดตศูนย์กลางจากหลายจุด
         final c = _centroid(_gpsPoints);
         _latController.text = c['lat']!.toStringAsFixed(7);
         _lngController.text = c['lng']!.toStringAsFixed(7);
@@ -489,7 +542,6 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
 
     setState(() => _isLoading = true);
 
-    // แปลงพิกัดไปเป็น payload vertices ที่ server รองรับ
     final vertices = _gpsPoints
         .map((p) => {'latitude': p['lat'], 'longitude': p['lng']})
         .toList();
@@ -501,13 +553,13 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
           fieldId: widget.field!['field_id'],
           fieldName: _nameController.text.trim(),
           sizeSquareMeter: _sizeController.text.trim(),
-          vertices: vertices, // ส่งแทน lat/lng
+          vertices: vertices,
         );
       } else {
         result = await FieldApiService.createField(
           fieldName: _nameController.text.trim(),
           sizeSquareMeter: _sizeController.text.trim(),
-          vertices: vertices, // ส่งแทน lat/lng
+          vertices: vertices,
         );
       }
     } catch (e) {
@@ -518,18 +570,14 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
 
     if (result['success']) {
       widget.onSaved();
-      Navigator.pop(context);
+      if (mounted) Navigator.pop(context);
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          result['success']
-              ? 'บันทึกสำเร็จ'
-              : (result['message'] ?? 'บันทึกล้มเหลว'),
-        ),
-        backgroundColor: result['success'] ? Colors.green : Colors.red,
-      ),
+    _toast(
+      result['success']
+          ? 'บันทึกสำเร็จ'
+          : (result['message'] ?? 'บันทึกล้มเหลว'),
+      error: !result['success'],
     );
   }
 
@@ -597,7 +645,6 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
               ),
               const SizedBox(height: 12),
 
-              // ปุ่มเพิ่มจุด/ล้างจุด + แสดงรายการจุด
               Row(
                 children: [
                   Expanded(
@@ -703,9 +750,17 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
 
   // เก็บรายการ marks ที่ผู้ใช้กดเพิ่มจาก GPS
   final List<Map<String, dynamic>> _marks = [];
+  bool _marksLoaded = false;
 
   // ขอบเขตแปลงแบบวงกลมจาก centroid(vertices) + พื้นที่ตร.ม.
   double? _centerLat, _centerLng, _radiusMeters;
+
+  // ค่ากำกับ
+  bool _enforceBoundary = false;
+  static const double _boundarySlack = 1.15;
+  static const double _minRadiusMeters = 50.0;
+  static const double _fallbackLat = 13.736717;
+  static const double _fallbackLng = 100.523186;
 
   @override
   void initState() {
@@ -714,6 +769,7 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
       final zone = FieldApiService.safeZoneData(widget.zone!);
       _nameController.text = zone['zone_name'];
       _treesController.text = zone['num_trees'].toString();
+      _loadExistingMarks(zone['zone_id']);
     } else {
       _treesController.text = '0';
     }
@@ -730,7 +786,32 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
         _radiusMeters! > 0;
   }
 
-  // ดึงรายละเอียดแปลง → ใช้ vertices หาศูนย์กลาง + ขนาดพื้นที่คำนวณรัศมี
+  Future<void> _loadExistingMarks(int zoneId) async {
+    try {
+      final res = await FieldApiService.getMarks(zoneId);
+      if (res['success'] == true) {
+        final items = List<Map<String, dynamic>>.from(res['data'] ?? []);
+        _marks
+          ..clear()
+          ..addAll(
+            items.map(
+              (m) => {
+                'tree_no': (m['tree_no'] as num).toInt(),
+                'latitude': (m['latitude'] as num).toDouble(),
+                'longitude': (m['longitude'] as num).toDouble(),
+              },
+            ),
+          );
+        _treesController.text = _marks.length.toString();
+      }
+    } catch (_) {
+      // ignore
+    } finally {
+      _marksLoaded = true;
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _loadFieldBoundary() async {
     final res = await FieldApiService.getFieldDetails(widget.fieldId);
     if (res['success'] == true && res['data'] != null) {
@@ -754,8 +835,10 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
       }
 
       if (_centerLat != null && _centerLng != null && sizeSqm > 0) {
-        // area = πr^2 -> r = sqrt(area/π)
-        _radiusMeters = math.sqrt(sizeSqm / math.pi);
+        _radiusMeters = math.sqrt(sizeSqm / math.pi); // r = sqrt(area/pi)
+        if (_radiusMeters! < _minRadiusMeters) _radiusMeters = _minRadiusMeters;
+      } else {
+        _radiusMeters = null;
       }
 
       if (mounted) setState(() {});
@@ -772,7 +855,6 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
     return {'lat': lat / pts.length, 'lng': lng / pts.length};
   }
 
-  // ขอสิทธิ์/เช็คบริการ location
   Future<bool> _ensureLocationReady() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
@@ -825,19 +907,18 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
       setState(() => _isLoading = true);
       final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 15),
       );
 
-      if (_isBoundaryActive) {
+      if (_enforceBoundary && _isBoundaryActive) {
         final dist = _distanceMeters(
           _centerLat!,
           _centerLng!,
           pos.latitude,
           pos.longitude,
         );
-        if (dist > _radiusMeters!) {
+        if (dist > _radiusMeters! * _boundarySlack) {
           _toast(
-            'ตำแหนงอยู่นอกขอบเขตแปลง (ห่างศูนย์กลาง ~${dist.toStringAsFixed(1)} m)',
+            'ตำแหน่งอยู่นอกขอบเขตแปลง (ห่างศูนย์กลาง ~${dist.toStringAsFixed(1)} m)',
             error: true,
           );
           setState(() => _isLoading = false);
@@ -861,6 +942,21 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
     }
   }
 
+  // ปุ่มทดสอบ: เพิ่มตำแหน่งตัวอย่าง
+  void _addSampleMark() {
+    final lat = _centerLat ?? _fallbackLat;
+    final lng = _centerLng ?? _fallbackLng;
+    setState(() {
+      _marks.add({
+        'tree_no': _marks.length + 1,
+        'latitude': lat,
+        'longitude': lng,
+      });
+      _treesController.text = _marks.length.toString();
+    });
+    _toast('เพิ่มตำแหน่งตัวอย่างแล้ว ${_marks.length} ต้น');
+  }
+
   void _removeMark(int index) {
     setState(() {
       _marks.removeAt(index);
@@ -868,6 +964,13 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
         _marks[i]['tree_no'] = i + 1;
       }
       _treesController.text = _marks.length.toString();
+    });
+  }
+
+  void _clearMarks() {
+    setState(() {
+      _marks.clear();
+      _treesController.text = '0';
     });
   }
 
@@ -904,29 +1007,28 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
     Map<String, dynamic> result;
 
     if (widget.zone != null) {
-      // อัปเดตโซนเดิม
       final trees = int.tryParse(_treesController.text) ?? 0;
+      // 1) อัปเดตชื่อ/จำนวนต้น
       result = await FieldApiService.updateZone(
         zoneId: widget.zone!['zone_id'],
         zoneName: _nameController.text.trim(),
         numTrees: trees < 0 ? 0 : trees,
       );
 
-      // ถ้ามี marks ใหม่ → เพิ่ม bulk เข้าโซน
-      if (result['success'] == true && _marks.isNotEmpty) {
-        final bulk = await FieldApiService.createMarksBulk(
+      // 2) แทนที่ marks ทั้งชุด
+      if (result['success'] == true) {
+        final putRes = await FieldApiService.replaceMarks(
           zoneId: widget.zone!['zone_id'],
           marks: _marks,
         );
-        if (!bulk['success']) {
+        if (putRes['success'] != true) {
           _toast(
-            'เพิ่มตำแหน่งบางส่วนไม่สำเร็จ: ${bulk['message']}',
+            'อัปเดตพิกัดไม่สำเร็จ: ${putRes['message'] ?? putRes['error'] ?? 'unknown'}',
             error: true,
           );
         }
       }
     } else {
-      // สร้างโซนใหม่
       if (_marks.isNotEmpty) {
         result = await FieldApiService.createZoneWithMarks(
           fieldId: widget.fieldId,
@@ -960,8 +1062,9 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final editing = widget.zone != null;
     return AlertDialog(
-      title: Text(widget.zone != null ? 'แก้ไขโซน' : 'เพิ่มโซนใหม่'),
+      title: Text(editing ? 'แก้ไขโซน' : 'เพิ่มโซนใหม่'),
       content: Form(
         key: _formKey,
         child: SingleChildScrollView(
@@ -999,7 +1102,7 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
               ),
               const SizedBox(height: 12),
 
-              // ปุ่มเพิ่ม mark จาก GPS + แสดงจำนวนที่เลือก
+              // ปุ่มเพิ่ม mark
               Row(
                 children: [
                   Expanded(
@@ -1010,19 +1113,29 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  if (_marks.isNotEmpty)
-                    OutlinedButton(
-                      onPressed: _isLoading
-                          ? null
-                          : () => setState(() {
-                              _marks.clear();
-                              _treesController.text = '0';
-                            }),
-                      child: const Text('ล้างตำแหน่ง'),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.bolt_outlined),
+                      label: const Text('เพิ่มตำแหน่งตัวอย่าง'),
+                      onPressed: _isLoading ? null : _addSampleMark,
                     ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
+
+              // สวิตช์บังคับขอบเขต
+              SwitchListTile(
+                title: const Text('บังคับให้อยู่ในขอบเขตแปลง'),
+                subtitle: Text(
+                  _isBoundaryActive && _radiusMeters != null
+                      ? 'รัศมี ~${_radiusMeters!.toStringAsFixed(0)} m • เผื่อ ${((_boundarySlack - 1) * 100).toStringAsFixed(0)}%'
+                      : 'ยังไม่มีพิกัด/พื้นที่ของแปลง',
+                ),
+                value: _enforceBoundary,
+                onChanged: (v) => setState(() => _enforceBoundary = v),
+              ),
+
               Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
@@ -1037,7 +1150,12 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
                 ),
               ),
 
-              // แสดงรายการ marks (ลบรายตัวได้)
+              if (editing && !_marksLoaded)
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+
               if (_marks.isNotEmpty) const SizedBox(height: 8),
               if (_marks.isNotEmpty)
                 Align(
@@ -1050,14 +1168,20 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
                       final m = e.value;
                       return Chip(
                         label: Text(
-                          '#${i + 1} '
-                          '(${(m['latitude'] as double).toStringAsFixed(5)}, '
-                          '${(m['longitude'] as double).toStringAsFixed(5)})',
+                          '#${i + 1} (${(m['latitude'] as double).toStringAsFixed(5)}, ${(m['longitude'] as double).toStringAsFixed(5)})',
                         ),
                         deleteIcon: const Icon(Icons.close),
                         onDeleted: _isLoading ? null : () => _removeMark(i),
                       );
                     }).toList(),
+                  ),
+                ),
+              if (_marks.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _isLoading ? null : _clearMarks,
+                    child: const Text('ล้างตำแหน่งทั้งหมด'),
                   ),
                 ),
             ],

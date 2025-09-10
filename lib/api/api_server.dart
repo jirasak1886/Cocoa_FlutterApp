@@ -1,14 +1,13 @@
-// api_server.dart
+// lib/api/api_server.dart
 import 'package:cocoa_app/utils/variable.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 class ApiServer {
   // ======================== CONFIG =========================
-  // static const String baseUrl = 'http://127.0.0.1:5000';
-
   static const List<String> alternativeUrls = [
     'http://127.0.0.1:5000',
     'http://localhost:5000',
@@ -20,7 +19,7 @@ class ApiServer {
 
   // ======================== STATE ==========================
   static String? _jwtToken;
-  static String? _currentBaseUrl = baseUrl;
+  static String? _currentBaseUrl = baseUrl; // มาจาก utils/variable.dart
 
   // ======================== URL ============================
   static void setBaseUrl(String url) {
@@ -55,7 +54,6 @@ class ApiServer {
     return '${t.substring(0, head)}...${t.substring(t.length - tail)}';
   }
 
-  /// พิมพ์ token ปัจจุบัน (เต็มเฉพาะเมื่อเปิด _LOG_FULL_TOKEN_IN_DEBUG และอยู่ใน debug)
   static void printCurrentToken() {
     final label = _LOG_FULL_TOKEN_IN_DEBUG && kDebugMode
         ? '(full)'
@@ -66,56 +64,70 @@ class ApiServer {
   }
 
   // ====================== HEADERS ==========================
+  /// เฮดเดอร์พื้นฐาน (ไม่มี Content-Type) ใช้ได้กับ GET/DELETE และ multipart
   static Map<String, String> get defaultHeaders {
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      // หมายเหตุ: อย่าใส่ CORS headers ฝั่ง client (ควรอยู่ที่เซิร์ฟเวอร์ Flask)
-    };
-
+    final headers = <String, String>{'Accept': 'application/json'};
     if (hasAuthToken) {
       headers['Authorization'] = 'Bearer $_jwtToken';
     }
     return headers;
   }
 
+  /// เฮดเดอร์สำหรับ JSON (มี Content-Type)
+  static Map<String, String> get jsonHeaders => {
+    ...defaultHeaders,
+    'Content-Type': 'application/json',
+  };
+
   // =================== RESPONSE PARSING =====================
   static Map<String, dynamic> handleResponse(http.Response response) {
-    try {
-      final contentType = response.headers['content-type'] ?? '';
+    final ok = response.statusCode >= 200 && response.statusCode < 300;
 
-      if (kDebugMode) {
-        final body = response.body;
-        final preview = body.length > 800
-            ? '${body.substring(0, 800)}...'
-            : body;
-        print('📤 Response Status: ${response.statusCode}');
-        print('📄 Response Body (preview): $preview');
-      }
+    if (kDebugMode) {
+      final bodyPrev = utf8.decode(response.bodyBytes, allowMalformed: true);
+      final preview = bodyPrev.length > 800
+          ? '${bodyPrev.substring(0, 800)}...'
+          : bodyPrev;
+      print('📤 Response Status: ${response.statusCode}');
+      print('📄 Response Body (preview): $preview');
+    }
 
-      if (contentType.contains('application/json')) {
-        final decoded = json.decode(response.body);
-        if (decoded is Map<String, dynamic>) return decoded;
-        return {'success': true, 'data': decoded};
-      } else {
+    final contentType = response.headers['content-type'] ?? '';
+    if (contentType.contains('application/json')) {
+      try {
+        final decoded = json.decode(utf8.decode(response.bodyBytes));
+        if (decoded is Map<String, dynamic>) {
+          // ใส่ success ถ้า server ไม่ส่งมา
+          return {
+            'success': decoded.containsKey('success') ? decoded['success'] : ok,
+            'status': response.statusCode,
+            ...decoded,
+          };
+        } else {
+          return {
+            'success': ok,
+            'status': response.statusCode,
+            'data': decoded,
+          };
+        }
+      } catch (e) {
         return {
-          'success': response.statusCode >= 200 && response.statusCode < 300,
-          'message': response.body,
-          'raw_response': true,
+          'success': false,
+          'status': response.statusCode,
+          'error': 'response_parse_error',
+          'message': 'ไม่สามารถประมวลผลข้อมูลจากเซิร์ฟเวอร์ได้: $e',
+          'raw_response': utf8.decode(response.bodyBytes, allowMalformed: true),
         };
       }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Error parsing response: $e');
-        print('📝 Raw response: ${response.body}');
-      }
-      return {
-        'success': false,
-        'error': 'response_parse_error',
-        'message': 'ไม่สามารถประมวลผลข้อมูลจากเซิร์ฟเวอร์ได้: $e',
-        'raw_response': response.body,
-      };
     }
+
+    // Non-JSON
+    return {
+      'success': ok,
+      'status': response.statusCode,
+      'message': utf8.decode(response.bodyBytes, allowMalformed: true),
+      'raw_response': true,
+    };
   }
 
   // ===================== ERROR HANDLING =====================
@@ -213,6 +225,11 @@ class ApiServer {
     Map<String, dynamic> data,
   ) async => _httpRequest('PUT', endpoint, data: data);
 
+  static Future<Map<String, dynamic>> patch(
+    String endpoint,
+    Map<String, dynamic> data,
+  ) async => _httpRequest('PATCH', endpoint, data: data);
+
   static Future<Map<String, dynamic>> delete(String endpoint) async =>
       _httpRequest('DELETE', endpoint);
 
@@ -226,7 +243,7 @@ class ApiServer {
         print('🚀 $method Request: $currentBaseUrl$endpoint');
         if (data != null) print('📦 Data: $data');
         print('🔑 Has Auth: $hasAuthToken | Bearer ${tokenPreview()}');
-        final authHeader = defaultHeaders['Authorization'];
+        final authHeader = hasAuthToken ? 'Bearer ${tokenPreview()}' : '<none>';
         print('🧾 Authorization header: $authHeader');
       }
 
@@ -243,19 +260,28 @@ class ApiServer {
           response = await http
               .post(
                 uri,
-                headers: defaultHeaders,
+                headers: jsonHeaders, // ใช้ jsonHeaders
                 body: data != null ? json.encode(data) : null,
               )
-              .timeout(const Duration(seconds: 30));
+              .timeout(const Duration(seconds: 60));
           break;
         case 'PUT':
           response = await http
               .put(
                 uri,
-                headers: defaultHeaders,
+                headers: jsonHeaders,
                 body: data != null ? json.encode(data) : null,
               )
-              .timeout(const Duration(seconds: 30));
+              .timeout(const Duration(seconds: 60));
+          break;
+        case 'PATCH':
+          response = await http
+              .patch(
+                uri,
+                headers: jsonHeaders,
+                body: data != null ? json.encode(data) : null,
+              )
+              .timeout(const Duration(seconds: 60));
           break;
         case 'DELETE':
           response = await http
@@ -274,6 +300,99 @@ class ApiServer {
           return _httpRequest(method, endpoint, data: data);
         }
       }
+      return handleError(e);
+    }
+  }
+
+  // ============== MULTIPART (UPLOAD FILES: File path) ======
+  static Future<Map<String, dynamic>> postMultipart(
+    String endpoint, {
+    Map<String, String>? fields,
+    List<File>? files,
+    String fileFieldName = 'files',
+  }) async {
+    try {
+      final url = Uri.parse('$currentBaseUrl$endpoint');
+      final req = http.MultipartRequest('POST', url);
+
+      // เฮดเดอร์ฐาน + Authorization (อย่าตั้ง content-type เอง)
+      final headers = Map<String, String>.from(defaultHeaders);
+      req.headers.addAll(headers);
+
+      // ฟิลด์ธรรมดา
+      if (fields != null && fields.isNotEmpty) {
+        req.fields.addAll(fields);
+      }
+
+      // แนบไฟล์จาก path
+      final List<File> safeFiles = (files ?? <File>[])
+          .where((f) => f.existsSync())
+          .toList();
+      for (final f in safeFiles) {
+        req.files.add(await http.MultipartFile.fromPath(fileFieldName, f.path));
+      }
+
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      final res = await http.Response.fromStream(streamed);
+      return handleResponse(res);
+    } catch (e) {
+      return handleError(e);
+    }
+  }
+
+  // ============== MULTIPART (UPLOAD BYTES) =================
+  // เดา MIME จากนามสกุลไฟล์แบบง่าย ๆ
+  static String _guessMimeFromName(String filename) {
+    final name = filename.toLowerCase();
+    if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.bmp')) return 'image/bmp';
+    if (name.endsWith('.webp')) return 'image/webp';
+    return 'application/octet-stream';
+  }
+
+  /// อัปโหลดไฟล์จาก "bytes" (เช่น PlatformFile.bytes)
+  /// ใช้เมื่อคุณไม่ได้มีไฟล์บนดิสก์ให้ fromPath ได้
+  static Future<Map<String, dynamic>> postMultipartBytes(
+    String endpoint, {
+    Map<String, String>? fields,
+    required List<({List<int> bytes, String filename, String? contentType})>
+    files,
+    String fileFieldName = 'files',
+  }) async {
+    try {
+      final url = Uri.parse('$currentBaseUrl$endpoint');
+      final req = http.MultipartRequest('POST', url);
+
+      // ใส่ header พื้นฐาน (อย่ากำหนด Content-Type เอง ให้ http จัดการ boundary)
+      final headers = Map<String, String>.from(defaultHeaders);
+      req.headers.addAll(headers);
+
+      // ฟิลด์ธรรมดา
+      if (fields != null && fields.isNotEmpty) {
+        req.fields.addAll(fields);
+      }
+
+      // แนบไฟล์จาก bytes
+      for (final f in files) {
+        final mime = (f.contentType ?? _guessMimeFromName(f.filename));
+        final parts = mime.split('/');
+        final type = parts.first;
+        final sub = parts.length > 1 ? parts.last : 'octet-stream';
+        req.files.add(
+          http.MultipartFile.fromBytes(
+            fileFieldName,
+            f.bytes,
+            filename: f.filename,
+            contentType: MediaType(type, sub),
+          ),
+        );
+      }
+
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      final res = await http.Response.fromStream(streamed);
+      return handleResponse(res);
+    } catch (e) {
       return handleError(e);
     }
   }
@@ -322,12 +441,12 @@ class ApiServer {
   ) {
     if (kDebugMode) {
       print('✅ Server connected: ${response.statusCode}');
-      final body = response.body;
+      final body = utf8.decode(response.bodyBytes, allowMalformed: true);
       final preview = body.length > 800 ? '${body.substring(0, 800)}...' : body;
       print('📄 Server response (preview): $preview');
     }
     try {
-      final data = json.decode(response.body);
+      final data = json.decode(utf8.decode(response.bodyBytes));
       return {
         'success': true,
         'connected': true,
@@ -370,5 +489,23 @@ class ApiServer {
       'alternative_urls': alternativeUrls,
       'headers': defaultHeaders,
     };
+  }
+
+  // =================== Extras (optional) ====================
+  static Future<Map<String, dynamic>> getWithQuery(
+    String endpoint, {
+    Map<String, String>? query,
+  }) async {
+    try {
+      final uri = Uri.parse(
+        '$currentBaseUrl$endpoint',
+      ).replace(queryParameters: query);
+      final r = await http
+          .get(uri, headers: defaultHeaders)
+          .timeout(const Duration(seconds: 30));
+      return handleResponse(r);
+    } catch (e) {
+      return handleError(e);
+    }
   }
 }
