@@ -36,7 +36,7 @@ class _InspectionPageState extends State<InspectionPage> {
   bool _recsLoading = false;
   List<Map<String, dynamic>> _recs = [];
 
-  // Constants for validation
+  // ===== Validation constants =====
   static const int maxFileSize = 20 * 1024 * 1024; // 20MB
   static const List<String> allowedTypes = [
     'jpg',
@@ -45,7 +45,9 @@ class _InspectionPageState extends State<InspectionPage> {
     'bmp',
     'webp',
   ];
-  static const int maxImagesPerInspection = 5;
+
+  /// จำกัด “ต่อรอบ” 5 รูป (แต่สร้างรอบใหม่กี่ครั้งก็ได้)
+  static const int maxImagesPerRound = 5;
 
   // ===== Helpers =====
   T? _pick<T>(Map<String, dynamic> res, String key) {
@@ -55,7 +57,7 @@ class _InspectionPageState extends State<InspectionPage> {
     return null;
   }
 
-  // >>> NEW: เงื่อนไขกดปุ่มเพิ่มรอบ <<<
+  // >>> เงื่อนไขกดปุ่มเพิ่มรอบ <<<
   bool get _canAddRound =>
       _isConnected &&
       !_busy &&
@@ -76,9 +78,10 @@ class _InspectionPageState extends State<InspectionPage> {
       _toast('กรุณาเลือกโซน', isError: true);
       return;
     }
-    _startRound();
+    // ✅ เพิ่มรอบใหม่จริง ๆ
+    _startRound(newRound: true);
   }
-  // <<< END NEW
+  // <<< END
 
   @override
   void initState() {
@@ -137,7 +140,6 @@ class _InspectionPageState extends State<InspectionPage> {
   // Enhanced image validation
   Future<bool> _validateImages(List<PlatformFile> files) async {
     for (final file in files) {
-      // Check file size
       if (file.size > maxFileSize) {
         _showErrorDialog(
           'ไฟล์ใหญ่เกินไป',
@@ -145,8 +147,6 @@ class _InspectionPageState extends State<InspectionPage> {
         );
         return false;
       }
-
-      // Check file type
       final extension = file.extension?.toLowerCase();
       if (extension == null || !allowedTypes.contains(extension)) {
         _showErrorDialog(
@@ -155,8 +155,6 @@ class _InspectionPageState extends State<InspectionPage> {
         );
         return false;
       }
-
-      // Check if file has data
       if (file.bytes == null || file.bytes!.isEmpty) {
         _showErrorDialog(
           'ไฟล์เสียหาย',
@@ -234,7 +232,6 @@ class _InspectionPageState extends State<InspectionPage> {
             )
             .toList();
 
-        // Reset selections if current field no longer exists
         if (_selectedFieldId == null ||
             !_fields.any((f) => f['field_id'] == _selectedFieldId)) {
           _selectedFieldId = null;
@@ -297,14 +294,10 @@ class _InspectionPageState extends State<InspectionPage> {
       _zones = [];
       _selectedZoneId = null;
     });
-    if (fieldId != null) {
-      _loadZones(fieldId);
-    }
+    if (fieldId != null) _loadZones(fieldId);
   }
 
-  void _onSelectZone(int? zoneId) {
-    setState(() => _selectedZoneId = zoneId);
-  }
+  void _onSelectZone(int? zoneId) => setState(() => _selectedZoneId = zoneId);
 
   void _toast(String m, {bool isError = false}) {
     if (!mounted) return;
@@ -318,14 +311,13 @@ class _InspectionPageState extends State<InspectionPage> {
     );
   }
 
-  Future<void> _startRound() async {
+  Future<void> _startRound({bool newRound = false}) async {
     FocusScope.of(context).unfocus();
 
     if (!_isConnected) {
       _toast('ไม่ได้เชื่อมต่อกับเซิร์ฟเวอร์', isError: true);
       return;
     }
-
     if (_selectedFieldId == null) {
       _toast('กรุณาเลือกแปลง', isError: true);
       return;
@@ -351,6 +343,7 @@ class _InspectionPageState extends State<InspectionPage> {
         fieldId: _selectedFieldId!,
         zoneId: _selectedZoneId!,
         notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        newRound: newRound, // ✅ ส่ง flag ไป backend
       );
 
       if (!mounted) return;
@@ -367,6 +360,9 @@ class _InspectionPageState extends State<InspectionPage> {
               ? 'เปิดรอบเดิมแล้ว (inspection_id=$id, round=$roundNo)'
               : 'เริ่มรอบสำเร็จ (inspection_id=$id, round=$roundNo)';
         });
+
+        // ซิงก์รายละเอียด/โควตาทันที
+        await _refreshDetail();
         await _loadRecs();
 
         if (!idem) {
@@ -398,14 +394,11 @@ class _InspectionPageState extends State<InspectionPage> {
       return;
     }
 
-    // รวมทั้งที่อัปโหลดไปแล้ว + ที่เลือกค้างไว้
-    final remain = (maxImagesPerInspection - (_uploadedCount + _picked.length))
-        .clamp(0, maxImagesPerInspection);
+    // รวมทั้งที่อัปโหลดไปแล้ว + ที่เลือกค้างไว้ → จำกัดต่อรอบ
+    final remain = (maxImagesPerRound - (_uploadedCount + _picked.length))
+        .clamp(0, maxImagesPerRound);
     if (remain == 0) {
-      _toast(
-        'อัปโหลดได้สูงสุด $maxImagesPerInspection รูปต่อรอบ',
-        isError: true,
-      );
+      _toast('อัปโหลดได้สูงสุด $maxImagesPerRound รูปต่อรอบ', isError: true);
       return;
     }
 
@@ -415,12 +408,10 @@ class _InspectionPageState extends State<InspectionPage> {
         allowMultiple: true,
         withData: true,
       );
-
       if (result == null || result.files.isEmpty) return;
 
       final filesToAdd = result.files.take(remain).toList();
 
-      // Validate selected files
       if (await _validateImages(filesToAdd)) {
         setState(() => _picked.addAll(filesToAdd));
         _toast('เลือกไฟล์สำเร็จ ${filesToAdd.length} ไฟล์');
@@ -440,10 +431,7 @@ class _InspectionPageState extends State<InspectionPage> {
       return;
     }
 
-    // Final validation before upload
-    if (!await _validateImages(_picked)) {
-      return;
-    }
+    if (!await _validateImages(_picked)) return;
 
     setState(() {
       _busy = true;
@@ -453,38 +441,51 @@ class _InspectionPageState extends State<InspectionPage> {
     try {
       final res = await InspectionApi.uploadImages(
         inspectionId: _inspectionId!,
-        images: _picked, // ใช้ PlatformFile
+        images: _picked,
       );
 
       if (!mounted) return;
 
-      if (res['success'] == true) {
-        // รองรับทั้งบนรากและใต้ data
-        List saved = [];
-        int? quotaRemain;
+      // รองรับทั้งรูปแบบ "หลายแบตช์" และ "แบตช์เดียว"
+      int accepted = 0;
+      int? quotaRemain;
 
+      if (res['batches'] is List) {
+        for (final b in (res['batches'] as List)) {
+          if (b is Map && b['success'] == true) {
+            if (b['accepted'] is int) {
+              accepted += b['accepted'] as int;
+            } else if (b['saved'] is List) {
+              accepted += (b['saved'] as List).length;
+            }
+            if (b['quota_remain'] is int) {
+              quotaRemain = b['quota_remain'] as int;
+            }
+          }
+        }
+      } else {
+        // fallback: แบตช์เดียว (รูปแบบเดิมจาก server)
+        List saved = [];
         if (res['saved'] is List) saved = res['saved'];
         if (res['quota_remain'] is int) quotaRemain = res['quota_remain'];
+        accepted = saved.length;
+      }
 
-        if (saved.isEmpty && res['data'] is Map) {
-          final data = res['data'] as Map;
-          if (data['saved'] is List) saved = data['saved'];
-          if (data['quota_remain'] is int) quotaRemain = data['quota_remain'];
-        }
-
-        final n = saved.length;
-        final remain =
-            quotaRemain ?? (maxImagesPerInspection - _uploadedCount - n);
-
+      if (res['success'] == true || accepted > 0) {
+        // อัปเดตสถานะฝั่ง client
         setState(() {
           _status = 'อัปโหลดสำเร็จ';
-          _uploadedCount += n;
+          _uploadedCount += accepted;
           _picked.clear();
         });
 
+        // ซิงก์ตัวเลขกับ server (กันเคสบางไฟล์ถูก reject)
+        await _refreshDetail();
+
+        final remain = quotaRemain ?? (maxImagesPerRound - _uploadedCount);
         _showSuccessDialog(
           'อัปโหลดสำเร็จ',
-          'อัปโหลดไฟล์สำเร็จ $n ไฟล์\nเหลือโควตา $remain ไฟล์',
+          'อัปโหลดไฟล์สำเร็จ $accepted ไฟล์\nเหลือโควตา ${remain < 0 ? 0 : remain} ไฟล์',
         );
       } else {
         final code = res['error'] ?? 'unknown';
@@ -492,7 +493,7 @@ class _InspectionPageState extends State<InspectionPage> {
 
         if (code == 'quota_full') {
           final exist = _pick<int>(res, 'exist') ?? 0;
-          final max = _pick<int>(res, 'max') ?? maxImagesPerInspection;
+          final max = _pick<int>(res, 'max') ?? maxImagesPerRound;
           errorMessage = 'ครบโควตาแล้ว: มีรูปอยู่แล้ว $exist/$max';
         } else if (code == 'payload_too_large') {
           errorMessage = 'ไฟล์ใหญ่เกินไป กรุณาย่อขนาดไฟล์ก่อนอัปโหลด';
@@ -521,8 +522,19 @@ class _InspectionPageState extends State<InspectionPage> {
       if (!mounted) return;
 
       if (d['success'] == true) {
-        _detail = (d['data'] is Map<String, dynamic>) ? d['data'] : d;
-        setState(() {});
+        final data = (d['data'] is Map<String, dynamic>)
+            ? d['data'] as Map<String, dynamic>
+            : d;
+        final images = (data['images'] as List?) ?? const [];
+        final quota = (data['quota'] as Map?) ?? const {};
+        final used = (quota['used'] is int)
+            ? quota['used'] as int
+            : images.length;
+
+        setState(() {
+          _detail = data;
+          _uploadedCount = used; // ✅ อัปเดตจำนวนที่อัปโหลดในรอบนี้
+        });
       } else {
         _toast(
           'ไม่สามารถโหลดรายละเอียดได้: ${d['error'] ?? 'ไม่ทราบสาเหตุ'}',
@@ -542,7 +554,6 @@ class _InspectionPageState extends State<InspectionPage> {
       return;
     }
 
-    // ตรวจสอบจำนวนรูปจาก server ก่อนสั่งวิเคราะห์
     if (_uploadedCount == 0) {
       try {
         final d = await InspectionApi.getInspectionDetail(_inspectionId!);
@@ -625,7 +636,6 @@ class _InspectionPageState extends State<InspectionPage> {
       final res = await InspectionApi.getRecommendations(
         inspectionId: _inspectionId!,
       );
-
       if (!mounted) return;
 
       if (res['success'] == true) {
@@ -641,9 +651,7 @@ class _InspectionPageState extends State<InspectionPage> {
         );
       }
     } catch (e) {
-      if (mounted) {
-        _toast('เกิดข้อผิดพลาดในการโหลดคำแนะนำ: $e', isError: true);
-      }
+      if (mounted) _toast('เกิดข้อผิดพลาดในการโหลดคำแนะนำ: $e', isError: true);
     } finally {
       if (mounted) setState(() => _recsLoading = false);
     }
@@ -673,9 +681,8 @@ class _InspectionPageState extends State<InspectionPage> {
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted)
         _showErrorDialog('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการอัปเดตสถานะ: $e');
-      }
     }
   }
 
@@ -757,14 +764,10 @@ class _InspectionPageState extends State<InspectionPage> {
         style: ElevatedButton.styleFrom(
           backgroundColor: isPrimary
               ? Colors.green
-              : isSecondary
-              ? Colors.green[50]
-              : Colors.white,
+              : (isSecondary ? Colors.green[50] : Colors.white),
           foregroundColor: isPrimary
               ? Colors.white
-              : isSecondary
-              ? Colors.green[700]
-              : Colors.green[600],
+              : (isSecondary ? Colors.green[700] : Colors.green[600]),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
             side: isPrimary
@@ -851,24 +854,24 @@ class _InspectionPageState extends State<InspectionPage> {
         ],
       ),
 
-      // >>> NEW: ปุ่มลอย "เพิ่มรอบ"
+      // >>> ปุ่มลอย "เพิ่มรอบ"
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _handleAddRoundPressed,
+        onPressed: _canAddRound ? _handleAddRoundPressed : null,
         icon: const Icon(Icons.add),
         label: const Text('เพิ่มรอบ'),
         backgroundColor: _canAddRound ? Colors.green : Colors.grey,
         foregroundColor: Colors.white,
       ),
 
-      // <<< END NEW
+      // <<< END
       body: AbsorbPointer(
         absorbing: _busy,
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // Header with connection status
+              // Header
               _buildStyledCard(
                 child: Column(
                   children: [
@@ -934,12 +937,14 @@ class _InspectionPageState extends State<InspectionPage> {
                     const SizedBox(height: 16),
                     _buildStyledDropdown<int>(
                       value: _selectedFieldId,
-                      items: _fields.map((f) {
-                        return DropdownMenuItem<int>(
-                          value: f['field_id'] as int,
-                          child: Text('${f['field_name']}'),
-                        );
-                      }).toList(),
+                      items: _fields
+                          .map(
+                            (f) => DropdownMenuItem<int>(
+                              value: f['field_id'] as int,
+                              child: Text('${f['field_name']}'),
+                            ),
+                          )
+                          .toList(),
                       onChanged: (_busy || !_isConnected)
                           ? null
                           : _onSelectField,
@@ -949,12 +954,14 @@ class _InspectionPageState extends State<InspectionPage> {
                     const SizedBox(height: 16),
                     _buildStyledDropdown<int>(
                       value: _selectedZoneId,
-                      items: _zones.map((z) {
-                        return DropdownMenuItem<int>(
-                          value: z['zone_id'] as int,
-                          child: Text('${z['zone_name']}'),
-                        );
-                      }).toList(),
+                      items: _zones
+                          .map(
+                            (z) => DropdownMenuItem<int>(
+                              value: z['zone_id'] as int,
+                              child: Text('${z['zone_name']}'),
+                            ),
+                          )
+                          .toList(),
                       onChanged:
                           (_busy || !_isConnected || _selectedFieldId == null)
                           ? null
@@ -1020,7 +1027,7 @@ class _InspectionPageState extends State<InspectionPage> {
                       children: [
                         _buildStyledButton(
                           onPressed: (!_busy && _isConnected)
-                              ? _startRound
+                              ? () => _startRound()
                               : null,
                           icon: Icons.flag,
                           isPrimary: true,
@@ -1032,7 +1039,7 @@ class _InspectionPageState extends State<InspectionPage> {
                               : _pickImages,
                           icon: Icons.photo_library,
                           isSecondary: true,
-                          child: Text('เลือกรูป (≤$maxImagesPerInspection)'),
+                          child: Text('เลือกรูป (≤$maxImagesPerRound)'),
                         ),
                         _buildStyledButton(
                           onPressed:
@@ -1089,7 +1096,7 @@ class _InspectionPageState extends State<InspectionPage> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Inspection ID: $_inspectionId | Round: ${_roundNo ?? "-"} | Uploaded: $_uploadedCount/$maxImagesPerInspection',
+                              'Inspection ID: $_inspectionId | Round: ${_roundNo ?? "-"} | Uploaded: $_uploadedCount/$maxImagesPerRound',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.green[700],
@@ -1257,7 +1264,6 @@ class _InspectionPageState extends State<InspectionPage> {
 
                             Color severityColor = Colors.orange;
                             IconData severityIcon = Icons.eco_outlined;
-
                             switch (sev.toString().toLowerCase()) {
                               case 'severe':
                                 severityColor = Colors.red;
@@ -1268,7 +1274,7 @@ class _InspectionPageState extends State<InspectionPage> {
                                 severityIcon = Icons.warning_outlined;
                                 break;
                               case 'mild':
-                                severityColor = Colors.yellowAccent[700]!;
+                                severityColor = Colors.yellowAccent;
                                 severityIcon = Icons.info_outline;
                                 break;
                             }
@@ -1356,7 +1362,7 @@ class _InspectionPageState extends State<InspectionPage> {
                   ),
                 ),
 
-              // Fertilizer Recommendations card
+              // Recommendations
               if (_inspectionId != null)
                 _buildStyledCard(
                   child: Column(

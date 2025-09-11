@@ -11,17 +11,21 @@ import 'api_server.dart'; // มี UploadByteFile + เมธอดอัปโ
 class InspectionApi {
   // =================== รอบตรวจ (inspection) ===================
 
-  /// เริ่มรอบตรวจ (ถ้ามี pending อยู่จะคืน inspection_id เดิม + idempotent=true)
+  /// เริ่มรอบตรวจ
+  /// - ถ้ามีรอบค้างสถานะ pending อยู่และ newRound=false => จะคืนรอบเดิม (idempotent=true)
+  /// - ถ้าต้องการ "เริ่มรอบใหม่" ให้ส่ง newRound=true (backend จะปิดรอบค้างก่อนแล้วเปิดอันใหม่)
   static Future<Map<String, dynamic>> startInspection({
     required int fieldId,
     required int zoneId,
     String? notes,
+    bool newRound = false, // << เพิ่มพารามิเตอร์
   }) async {
     try {
       final body = <String, dynamic>{
         'field_id': fieldId,
         'zone_id': zoneId,
         if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+        if (newRound) 'new_round': true, // << สำคัญ: ส่งไปที่ backend
       };
       return await ApiServer.post('/api/inspections/start', body);
     } catch (e) {
@@ -29,7 +33,21 @@ class InspectionApi {
     }
   }
 
-  /// รายละเอียดรอบตรวจ
+  /// helper สั้นๆ สำหรับ "เริ่มรอบใหม่" โดยตรง
+  static Future<Map<String, dynamic>> startNewRound({
+    required int fieldId,
+    required int zoneId,
+    String? notes,
+  }) {
+    return startInspection(
+      fieldId: fieldId,
+      zoneId: zoneId,
+      notes: notes,
+      newRound: true,
+    );
+  }
+
+  /// รายละเอียดรอบตรวจ (รวม quota ใน data.quota: {max, used, remain})
   static Future<Map<String, dynamic>> getInspectionDetail(
     int inspectionId,
   ) async {
@@ -51,7 +69,7 @@ class InspectionApi {
 
   // =================== วิเคราะห์รูป (model) ===================
 
-  /// สั่งให้เซิร์ฟเวอร์รันวิเคราะห์รูปของ inspection นี้
+  /// สั่งให้เซิร์ฟเวอร์รันวิเคราะห์รูปของ inspection นี้ (backend ไปเรียก routes/detect.py)
   static Future<Map<String, dynamic>> runAnalyze(int inspectionId) async {
     try {
       return await ApiServer.post('/api/inspections/$inspectionId/analyze', {});
@@ -61,7 +79,7 @@ class InspectionApi {
   }
 
   // =================== อัปโหลดรูปภาพ ===================
-  // DB จำกัด "รวม" ≤ 5 รูปต่อ inspection → อัปได้หลายคำขอ แต่หยุดเมื่อ quota เต็ม
+  // โควตา: "รอบละ" ≤ 5 รูป — อัปได้หลายคำขอในรอบเดียว แต่รวมแล้วต้องไม่เกิน 5
 
   /// (ครั้งเดียว) อัปโหลด ≤ 5 รูปจาก `PlatformFile` (รองรับ Web: bytes, Mobile/Desktop: path/bytes)
   static Future<Map<String, dynamic>> uploadImagesOnce({
@@ -70,7 +88,7 @@ class InspectionApi {
     String fieldName = 'images',
   }) async {
     try {
-      // เตรียมรายการไฟล์ที่พร้อมส่ง (หยิบมาไม่เกิน 5)
+      // เตรียมรายการไฟล์ที่พร้อมส่ง (หยิบมาไม่เกิน 5 ต่อคำขอ)
       final List<UploadByteFile> byteItems = [];
       final List<File> filePathItems = [];
 
@@ -120,7 +138,7 @@ class InspectionApi {
   }
 
   /// (หลายชุดอัตโนมัติ) ถ้าเลือก > 5 รูป จะแบ่งเป็นหลายคำขอ ชุดละ ≤ 5 รูป แล้วอัปจนหมด
-  /// จะ "หยุดทันที" เมื่อ quota ของรอบนี้เต็ม (quota_remain==0) หรือเจอ error quota_full
+  /// จะ "หยุดทันที" เมื่อ quota ของ **รอบนี้** เต็ม (quota_remain==0) หรือเจอ error quota_full
   static Future<Map<String, dynamic>> uploadImagesBatches({
     required int inspectionId,
     required List<PlatformFile> images,
@@ -203,7 +221,7 @@ class InspectionApi {
         } else {
           totalFailed += 1;
 
-          // ✅ ถ้าเจอ quota_full จาก Trigger/Server ให้หยุดทันที
+          // ✅ ถ้าเจอ quota_full จาก Server ให้หยุดทันที
           final err = (res['error'] ?? '').toString();
           if (err == 'quota_full') {
             break;
@@ -211,8 +229,11 @@ class InspectionApi {
         }
       }
 
+      // success = true ถ้าอัปโหลดได้อย่างน้อยหนึ่งไฟล์ หรือไม่พบ error
+      final overallSuccess = (totalAccepted > 0) || (totalFailed == 0);
+
       return {
-        'success': totalFailed == 0,
+        'success': overallSuccess,
         'batches': batches,
         'summary': {
           'total_batches': batches.length,
