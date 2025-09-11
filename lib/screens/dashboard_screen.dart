@@ -295,7 +295,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   print('Navigate to plant inspection');
                 }),
                 _buildMenuCard('รายงาน', Icons.analytics, Colors.purple, () {
-                  //Navigator.of(context).pushNamed('/history');
+                  Navigator.of(context).pushNamed('/history');
                   print('Navigate to reports');
                 }),
                 _buildMenuCard('ตั้งค่า', Icons.settings, Colors.grey, () {

@@ -55,6 +55,31 @@ class _InspectionPageState extends State<InspectionPage> {
     return null;
   }
 
+  // >>> NEW: เงื่อนไขกดปุ่มเพิ่มรอบ <<<
+  bool get _canAddRound =>
+      _isConnected &&
+      !_busy &&
+      _selectedFieldId != null &&
+      _selectedZoneId != null;
+
+  void _handleAddRoundPressed() {
+    if (_busy) return;
+    if (!_isConnected) {
+      _toast('ไม่ได้เชื่อมต่อกับเซิร์ฟเวอร์', isError: true);
+      return;
+    }
+    if (_selectedFieldId == null) {
+      _toast('กรุณาเลือกแปลง', isError: true);
+      return;
+    }
+    if (_selectedZoneId == null) {
+      _toast('กรุณาเลือกโซน', isError: true);
+      return;
+    }
+    _startRound();
+  }
+  // <<< END NEW
+
   @override
   void initState() {
     super.initState();
@@ -346,6 +371,11 @@ class _InspectionPageState extends State<InspectionPage> {
 
         if (!idem) {
           _showSuccessDialog('สำเร็จ', 'เริ่มรอบตรวจใหม่แล้ว รอบที่ $roundNo');
+        } else {
+          _toast(
+            'มีรอบที่กำลังดำเนินการอยู่แล้ว (เปิดรอบเดิมให้)',
+            isError: false,
+          );
         }
       } else {
         final error = res['error'] ?? 'ไม่ทราบสาเหตุ';
@@ -820,6 +850,18 @@ class _InspectionPageState extends State<InspectionPage> {
           ),
         ],
       ),
+
+      // >>> NEW: ปุ่มลอย "เพิ่มรอบ"
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _handleAddRoundPressed,
+        icon: const Icon(Icons.add),
+        label: const Text('เพิ่มรอบ'),
+        backgroundColor: _canAddRound ? Colors.green : Colors.grey,
+        foregroundColor: Colors.white,
+      ),
+
+      // <<< END NEW
       body: AbsorbPointer(
         absorbing: _busy,
         child: SingleChildScrollView(

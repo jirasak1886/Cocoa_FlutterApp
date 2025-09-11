@@ -22,6 +22,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
   List<Map<String, dynamic>> _zones = [];
   List<Map<String, dynamic>> _groups = [];
 
+  // โหลดคำแนะนำปุ๋ยต่อกลุ่ม
   final Map<String, bool> _fertLoading = {};
   final Map<String, List<Map<String, dynamic>>> _fertByKey = {};
   static const int _maxRecsFetch = 20;
@@ -138,7 +139,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     }
 
     final res = await InspectionApi.getHistory(
-      group: _group,
+      group: _group, // ✅ ใช้ named param
       from: _fmtDate(from),
       to: _fmtDate(to),
       fieldId: _fieldId,
@@ -170,9 +171,9 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
       month = _asInt(g['month'], _month);
     }
 
-    _fertLoading[key] = true;
-    setState(() {});
+    setState(() => _fertLoading[key] = true);
 
+    // 1) ดึงรายการรอบในช่วง
     final lr = await InspectionApi.listInspections(
       page: 1,
       pageSize: 100,
@@ -187,6 +188,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     final List items =
         (lr['items'] ?? lr['data'] ?? lr['inspections'] ?? []) as List;
 
+    // 2) ไล่ดึง recommendation ต่อ inspection (จำกัด _maxRecsFetch)
     final recs = <Map<String, dynamic>>[];
     for (final it in items.take(_maxRecsFetch)) {
       final m = Map<String, dynamic>.from(it as Map);
@@ -195,7 +197,9 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
       );
       if (id <= 0) continue;
 
-      final rr = await InspectionApi.getRecommendations(inspectionId: id);
+      final rr = await InspectionApi.getRecommendations(
+        inspectionId: id, // ✅ named param
+      );
       if (rr['success'] == true) {
         final List d = rr['data'] ?? rr['recommendations'] ?? [];
         recs.addAll(d.map((e) => Map<String, dynamic>.from(e as Map)));
@@ -207,6 +211,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     if (mounted) setState(() {});
   }
 
+  // ===== UI parts =====
   Widget _buildHeader() {
     final now = DateTime.now();
     final years = List<int>.generate(6, (i) => now.year - i);
@@ -254,6 +259,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
             // Line 2: year + (month)
             Row(
               children: [
+                // Year
                 Expanded(
                   child: DropdownButtonFormField<int>(
                     value: _year,
@@ -274,6 +280,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
                   ),
                 ),
                 const SizedBox(width: 12),
+                // Month
                 if (_group == 'month')
                   Expanded(
                     child: DropdownButtonFormField<int>(

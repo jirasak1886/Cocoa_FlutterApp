@@ -6,6 +6,18 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 
+/// === Helper type สำหรับอัปโหลดแบบ bytes (ใช้กับ Web/กรณีไม่มี path) ===
+class UploadByteFile {
+  final List<int> bytes;
+  final String filename;
+  final String? contentType;
+  const UploadByteFile({
+    required this.bytes,
+    required this.filename,
+    this.contentType,
+  });
+}
+
 class ApiServer {
   // ======================== CONFIG =========================
   static const List<String> alternativeUrls = [
@@ -395,6 +407,62 @@ class ApiServer {
     } catch (e) {
       return handleError(e);
     }
+  }
+
+  /// === Convenience: อัปโหลดภาพ inspection แบบ BYTES (ใช้กับ Web/bytes) ===
+  static Future<Map<String, dynamic>> uploadInspectionImagesBytes({
+    required int inspectionId,
+    required List<UploadByteFile> files,
+    String fieldName = 'images',
+    Map<String, String>? fields,
+  }) async {
+    if (files.isEmpty) {
+      return {
+        'success': false,
+        'error': 'no_files',
+        'message': 'No files to upload',
+      };
+    }
+
+    // แปลงเป็น record ให้เข้ากับ postMultipartBytes(...)
+    final payload =
+        <({List<int> bytes, String filename, String? contentType})>[];
+    for (final f in files) {
+      payload.add((
+        bytes: f.bytes,
+        filename: f.filename,
+        contentType: f.contentType,
+      ));
+    }
+
+    return await postMultipartBytes(
+      '/api/inspections/$inspectionId/images',
+      fields: fields,
+      files: payload,
+      fileFieldName: fieldName,
+    );
+  }
+
+  /// === Convenience: อัปโหลดภาพ inspection แบบ FILE PATH (มือถือ/เดสก์ท็อป) ===
+  static Future<Map<String, dynamic>> uploadInspectionImagesFiles({
+    required int inspectionId,
+    required List<File> files,
+    String fieldName = 'images',
+    Map<String, String>? fields,
+  }) async {
+    if (files.isEmpty) {
+      return {
+        'success': false,
+        'error': 'no_files',
+        'message': 'No files to upload',
+      };
+    }
+    return await postMultipart(
+      '/api/inspections/$inspectionId/images',
+      fields: fields,
+      files: files,
+      fileFieldName: fieldName,
+    );
   }
 
   // =================== CONNECTION CHECK =====================
