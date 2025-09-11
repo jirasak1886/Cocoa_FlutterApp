@@ -36,6 +36,9 @@ class _InspectionPageState extends State<InspectionPage> {
   bool _recsLoading = false;
   List<Map<String, dynamic>> _recs = [];
 
+  // ✅ ผลตรวจจับรายรูปจาก /analyze
+  List<Map<String, dynamic>> _analyzeResults = [];
+
   // ===== Validation constants =====
   static const int maxFileSize = 20 * 1024 * 1024; // 20MB
   static const List<String> allowedTypes = [
@@ -93,6 +96,37 @@ class _InspectionPageState extends State<InspectionPage> {
   void dispose() {
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  // ===== URL รูปจาก image_path (relative) =====
+  String _imageUrl(String rel) {
+    final base = ApiServer.currentBaseUrl.replaceAll(RegExp(r'\/+$'), '');
+    final relNorm = rel.startsWith('/') ? rel.substring(1) : rel;
+    // backend เก็บไว้ใต้ static/uploads/<rel>
+    return '$base/static/uploads/$relNorm';
+  }
+
+  // ===== ดึง preds ของรูปเดียวจาก _analyzeResults ด้วยการเทียบชื่อไฟล์ =====
+  List<Map<String, dynamic>> _predsForImage(String imagePathOrRel) {
+    // ชื่อไฟล์ที่เก็บใน DB เป็น rel-path แต่ results.image เป็น absolute path
+    final imgName = imagePathOrRel.split(RegExp(r'[\\/]+')).last;
+    final hit = _analyzeResults.where((m) {
+      final p = (m['image'] ?? '').toString();
+      final last = p.split(RegExp(r'[\\/]+')).last;
+      return last == imgName;
+    }).toList();
+    if (hit.isEmpty) return const [];
+    final preds = (hit.first['preds'] as List?) ?? const [];
+    return preds.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  String _formatConf(dynamic v) {
+    try {
+      final d = (v is num) ? v.toDouble() : double.parse('$v');
+      return '${(d * 100).clamp(0, 100).toStringAsFixed(1)}%';
+    } catch (_) {
+      return '-';
+    }
   }
 
   // Enhanced connection checking with retry logic
@@ -336,6 +370,7 @@ class _InspectionPageState extends State<InspectionPage> {
       _picked.clear();
       _detail = null;
       _recs = [];
+      _analyzeResults = []; // เคลียร์ผลเก่าเมื่อเริ่มรอบ
     });
 
     try {
@@ -583,6 +618,14 @@ class _InspectionPageState extends State<InspectionPage> {
     try {
       final res = await InspectionApi.runAnalyze(_inspectionId!);
 
+      // 🔽 เก็บผลรายรูปจาก analyze เพื่อนำไปแสดง
+      final List rr = (res['results'] as List?) ?? const [];
+      setState(() {
+        _analyzeResults = rr
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      });
+
       if (!mounted) return;
 
       if (res['success'] == true) {
@@ -681,8 +724,9 @@ class _InspectionPageState extends State<InspectionPage> {
         );
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         _showErrorDialog('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการอัปเดตสถานะ: $e');
+      }
     }
   }
 
@@ -837,6 +881,8 @@ class _InspectionPageState extends State<InspectionPage> {
         (_detail?['findings'] as List?) ??
         (_detail?['inspection']?['findings'] as List?) ??
         [];
+    final images =
+        (_detail?['images'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
@@ -1111,7 +1157,7 @@ class _InspectionPageState extends State<InspectionPage> {
                 ),
               ),
 
-              // Preview picked images
+              // Preview picked images (ยังไม่อัปโหลด)
               if (_picked.isNotEmpty)
                 _buildStyledCard(
                   child: Column(
@@ -1210,7 +1256,155 @@ class _InspectionPageState extends State<InspectionPage> {
                   ),
                 ),
 
-              // Results (findings)
+              // ===== ผลตรวจจับ "รายรูป" ของรอบนี้ =====
+              if (images.isNotEmpty)
+                _buildStyledCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.image_search, color: Colors.green[600]),
+                          const SizedBox(width: 8),
+                          Text(
+                            'ผลตรวจจับรายรูป (ทุกภาพในรอบนี้)',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green[800],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      if (_analyzeResults.isEmpty)
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.grey[600]),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'ยังไม่มีผลตรวจจับรายรูป • กรุณากด "สั่งตรวจโมเดล" หลังอัปโหลดรูปครบ',
+                                  style: TextStyle(color: Colors.grey[700]),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (_analyzeResults.isNotEmpty)
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: images.map((img) {
+                            final rel = (img['image_path'] ?? '').toString();
+                            final url = _imageUrl(rel);
+                            final preds = _predsForImage(rel);
+
+                            return Container(
+                              width: 220,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.grey[300]!),
+                                color: Colors.white,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // รูป
+                                  ClipRRect(
+                                    borderRadius: const BorderRadius.only(
+                                      topLeft: Radius.circular(12),
+                                      topRight: Radius.circular(12),
+                                    ),
+                                    child: AspectRatio(
+                                      aspectRatio: 4 / 3,
+                                      child: Image.network(
+                                        url,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Container(
+                                          color: Colors.grey[200],
+                                          child: const Center(
+                                            child: Icon(
+                                              Icons.broken_image,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  // รายการ preds
+                                  Padding(
+                                    padding: const EdgeInsets.all(8.0),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          rel.split('/').last,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        if (preds.isEmpty)
+                                          Text(
+                                            '— ไม่พบวัตถุ / หรือ < 0.25',
+                                            style: TextStyle(
+                                              color: Colors.grey[600],
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        if (preds.isNotEmpty)
+                                          ...preds.map((p) {
+                                            final cls = '${p['class'] ?? '-'}';
+                                            final conf = _formatConf(
+                                              p['confidence'],
+                                            );
+                                            return Row(
+                                              children: [
+                                                const Icon(
+                                                  Icons.check_circle,
+                                                  size: 14,
+                                                  color: Colors.green,
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Expanded(
+                                                  child: Text(
+                                                    '$cls • $conf',
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                    ),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            );
+                                          }),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                    ],
+                  ),
+                ),
+
+              // Results (findings) — สรุปรวมรายรอบ
               if (_detail != null)
                 _buildStyledCard(
                   child: Column(
@@ -1225,7 +1419,7 @@ class _InspectionPageState extends State<InspectionPage> {
                           ),
                           const SizedBox(width: 8),
                           Text(
-                            'ผลการตรวจ',
+                            'ผลการตรวจ (สรุปตามธาตุอาหาร)',
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
