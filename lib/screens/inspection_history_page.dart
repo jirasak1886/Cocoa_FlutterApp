@@ -20,6 +20,8 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
   bool _loading = false;
   List<Map<String, dynamic>> _fields = [];
   List<Map<String, dynamic>> _zones = [];
+
+  // ✅ เปลี่ยนจาก _groups (ที่รอ res['groups']) ให้เราสร้างเองจาก res['buckets']
   List<Map<String, dynamic>> _groups = [];
 
   // โหลดคำแนะนำปุ๋ยต่อกลุ่ม
@@ -139,7 +141,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     }
 
     final res = await InspectionApi.getHistory(
-      group: _group, // ✅ ใช้ named param
+      group: _group,
       from: _fmtDate(from),
       to: _fmtDate(to),
       fieldId: _fieldId,
@@ -150,9 +152,41 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     setState(() => _loading = false);
 
     if (res['success'] == true) {
-      final List raw = res['groups'] ?? [];
-      _groups = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-      setState(() {});
+      // ✅ แปลง response ปัจจุบัน (buckets/top_nutrients) → groups ที่ UI ใช้
+      final List buckets = res['buckets'] ?? [];
+      final List tops = res['top_nutrients'] ?? [];
+      final groupType = (res['group'] ?? _group).toString();
+
+      final out = <Map<String, dynamic>>[];
+      for (final b in buckets) {
+        final m = Map<String, dynamic>.from(b as Map);
+        final bucket = (m['bucket'] ?? '').toString(); // "YYYY" หรือ "YYYY-MM"
+        int year = _year;
+        int? month;
+
+        final parts = bucket.split('-');
+        if (parts.isNotEmpty) {
+          year = int.tryParse(parts[0]) ?? _year;
+          if (parts.length > 1) {
+            month = int.tryParse(parts[1]) ?? _month;
+          }
+        }
+
+        out.add({
+          'key': bucket, // ใช้สำหรับ map โหลดคำแนะนำ
+          'label': bucket,
+          'year': year,
+          if (groupType == 'month' && month != null) 'month': month,
+          'inspections': _asInt(m['inspections'], 0),
+          'findings': _asInt(m['findings'], 0),
+          // แนบ top ของช่วงเดิม (ถ้ามีหลาย bucket/ช่วง อาจอยากเรียก API แยกตามช่วงภายหลัง)
+          'top_nutrients': tops,
+        });
+      }
+
+      setState(() {
+        _groups = out;
+      });
     } else {
       _toast('โหลดประวัติไม่สำเร็จ: ${res['error'] ?? 'unknown'}');
     }
@@ -197,11 +231,10 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
       );
       if (id <= 0) continue;
 
-      final rr = await InspectionApi.getRecommendations(
-        inspectionId: id, // ✅ named param
-      );
+      final rr = await InspectionApi.getRecommendations(inspectionId: id);
       if (rr['success'] == true) {
         final List d = rr['data'] ?? rr['recommendations'] ?? [];
+        // ✅ ไม่แปลงเป็น schema เก่า แต่ใช้ฟิลด์จริงจาก backend
         recs.addAll(d.map((e) => Map<String, dynamic>.from(e as Map)));
       }
     }
@@ -408,7 +441,8 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
                   children: tops.map((t) {
                     final c = (t['code'] ?? t['nutrient_code'] ?? '-')
                         .toString();
-                    final cnt = _asInt(t['count'], 0);
+                    // ✅ รองรับทั้ง 'count' และ 'cnt'
+                    final cnt = _asInt(t['count'] ?? t['cnt'], 0);
                     return Chip(
                       label: Text('$c • $cnt'),
                       backgroundColor: Colors.orange[50],
@@ -439,16 +473,36 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
               padding: const EdgeInsets.all(12),
               child: Column(
                 children: recs.map((r) {
-                  final nutrient = r['nutrient_code'] ?? r['nutrient'] ?? '-';
-                  final product = r['product_name'] ?? r['fertilizer'] ?? '-';
-                  final dose = (r['dosage'] ?? r['dose'])?.toString() ?? '-';
-                  final unit = r['unit'] ?? '';
+                  final nutrient = (r['nutrient_code'] ?? r['nutrient'] ?? '-')
+                      .toString();
+                  // ✅ ใช้ฟิลด์จริงจาก backend
+                  final fertName =
+                      (r['fert_name'] ??
+                              r['fertilizer'] ??
+                              r['product_name'] ??
+                              '-')
+                          .toString();
+                  final form = (r['formulation'] ?? '').toString();
+                  final rate =
+                      (r['rate_per_area'] ?? r['dosage'] ?? r['dose'] ?? '-')
+                          .toString();
+                  final method = (r['application_method'] ?? '').toString();
                   final status = (r['status'] ?? 'suggested').toString();
+
+                  final productLabel = form.isNotEmpty
+                      ? '$fertName ($form)'
+                      : fertName;
+                  final sub = [
+                    if (rate.isNotEmpty) 'อัตรา: $rate',
+                    if (method.isNotEmpty) method,
+                    status,
+                  ].join(' • ');
+
                   return ListTile(
                     dense: true,
                     leading: const Icon(Icons.spa_outlined),
-                    title: Text('$nutrient • $product'),
-                    subtitle: Text('อัตรา: $dose $unit • $status'),
+                    title: Text('$nutrient • $productLabel'),
+                    subtitle: Text(sub),
                   );
                 }).toList(),
               ),
