@@ -73,6 +73,7 @@ class InspectionApi {
 
   // =================== อัปโหลดรูปภาพ ===================
 
+  /// อัป “ครั้งเดียว” สูงสุด 5 ไฟล์ (จะเลือกระหว่าง bytes หรือ path ให้เอง)
   static Future<Map<String, dynamic>> uploadImagesOnce({
     required int inspectionId,
     required List<PlatformFile> images,
@@ -123,6 +124,7 @@ class InspectionApi {
     }
   }
 
+  /// อัปแบบ “แบ่งก้อนละ ≤5 ไฟล์” และหยุดเมื่อโควต้ารอบเต็ม
   static Future<Map<String, dynamic>> uploadImagesBatches({
     required int inspectionId,
     required List<PlatformFile> images,
@@ -184,26 +186,27 @@ class InspectionApi {
 
         final ok = (res['success'] == true);
         if (ok) {
-          final accepted =
-              (res['accepted'] ??
-                      (res['saved'] is List
-                          ? (res['saved'] as List).length
-                          : 0))
-                  as int;
-          totalAccepted += accepted;
-          totalSkipped += (res['skipped'] is List
-              ? (res['skipped'] as List).length
-              : 0);
+          // ✅ server ส่งกลับ { saved: List, quota_remain: int, skipped: int }
+          final int savedCount = (res['saved'] is List)
+              ? (res['saved'] as List).length
+              : (res['accepted'] is int ? res['accepted'] as int : 0);
+          totalAccepted += savedCount;
 
-          final quotaRemain = res['quota_remain'] is int
+          final int skippedCount = (res['skipped'] is int)
+              ? (res['skipped'] as int)
+              : 0;
+          totalSkipped += skippedCount;
+
+          final int? quotaRemain = (res['quota_remain'] is int)
               ? res['quota_remain'] as int
               : null;
-          if (quotaRemain != null && quotaRemain <= 0)
-            break; // ✅ quota เต็ม หยุด
+          if (quotaRemain != null && quotaRemain <= 0) {
+            break; // ⛔ โควต้าเต็ม หยุดส่ง
+          }
         } else {
           totalFailed += 1;
           final err = (res['error'] ?? '').toString();
-          if (err == 'quota_full') break; // ✅ server แจ้ง quota เต็ม หยุด
+          if (err == 'quota_full') break; // ⛔ server แจ้งโควต้าเต็ม
         }
       }
 

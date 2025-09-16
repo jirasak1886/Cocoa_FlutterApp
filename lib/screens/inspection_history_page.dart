@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:cocoa_app/api/field_api.dart';
 import 'package:cocoa_app/api/inspection_api.dart';
+// 👇 เพิ่ม import หน้าสถิติ
+import 'package:cocoa_app/screens/inspection_stats_page.dart';
 
 class InspectionHistoryPage extends StatefulWidget {
   const InspectionHistoryPage({super.key});
@@ -21,7 +23,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
   List<Map<String, dynamic>> _fields = [];
   List<Map<String, dynamic>> _zones = [];
 
-  // ✅ เปลี่ยนจาก _groups (ที่รอ res['groups']) ให้เราสร้างเองจาก res['buckets']
+  // ✅ ใช้ groups ที่เราสร้างเองจาก res['buckets']
   List<Map<String, dynamic>> _groups = [];
 
   // โหลดคำแนะนำปุ๋ยต่อกลุ่ม
@@ -152,7 +154,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     setState(() => _loading = false);
 
     if (res['success'] == true) {
-      // ✅ แปลง response ปัจจุบัน (buckets/top_nutrients) → groups ที่ UI ใช้
+      // ✅ แปลง buckets → groups ที่ UI ใช้
       final List buckets = res['buckets'] ?? [];
       final List tops = res['top_nutrients'] ?? [];
       final groupType = (res['group'] ?? _group).toString();
@@ -179,14 +181,11 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
           if (groupType == 'month' && month != null) 'month': month,
           'inspections': _asInt(m['inspections'], 0),
           'findings': _asInt(m['findings'], 0),
-          // แนบ top ของช่วงเดิม (ถ้ามีหลาย bucket/ช่วง อาจอยากเรียก API แยกตามช่วงภายหลัง)
           'top_nutrients': tops,
         });
       }
 
-      setState(() {
-        _groups = out;
-      });
+      setState(() => _groups = out);
     } else {
       _toast('โหลดประวัติไม่สำเร็จ: ${res['error'] ?? 'unknown'}');
     }
@@ -234,7 +233,6 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
       final rr = await InspectionApi.getRecommendations(inspectionId: id);
       if (rr['success'] == true) {
         final List d = rr['data'] ?? rr['recommendations'] ?? [];
-        // ✅ ไม่แปลงเป็น schema เก่า แต่ใช้ฟิลด์จริงจาก backend
         recs.addAll(d.map((e) => Map<String, dynamic>.from(e as Map)));
       }
     }
@@ -441,7 +439,6 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
                   children: tops.map((t) {
                     final c = (t['code'] ?? t['nutrient_code'] ?? '-')
                         .toString();
-                    // ✅ รองรับทั้ง 'count' และ 'cnt'
                     final cnt = _asInt(t['count'] ?? t['cnt'], 0);
                     return Chip(
                       label: Text('$c • $cnt'),
@@ -475,7 +472,6 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
                 children: recs.map((r) {
                   final nutrient = (r['nutrient_code'] ?? r['nutrient'] ?? '-')
                       .toString();
-                  // ✅ ใช้ฟิลด์จริงจาก backend
                   final fertName =
                       (r['fert_name'] ??
                               r['fertilizer'] ??
@@ -524,6 +520,24 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
             onPressed: _loading ? null : _loadHistory,
             icon: const Icon(Icons.refresh),
             tooltip: 'โหลดข้อมูล',
+          ),
+          // 👇 ปุ่มไปหน้าสถิติ (ส่งฟิลเตอร์ปัจจุบันไปให้)
+          IconButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => InspectionStatsPage(
+                    initialGroup: _group,
+                    initialYear: _year,
+                    initialMonth: _month,
+                    initialFieldId: _fieldId,
+                    initialZoneId: _zoneId,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.insights_outlined),
+            tooltip: 'ดูสถิติ',
           ),
         ],
       ),

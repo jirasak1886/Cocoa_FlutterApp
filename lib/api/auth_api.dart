@@ -14,6 +14,24 @@ class AuthApiService {
   static Timer? _validationTimer;
   static DateTime? _lastActivity;
 
+  // ==================== UTIL: JWT EXP PARSER ====================
+  static DateTime _expiryFromTokenOrDefault(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length == 3) {
+        final payloadJson = utf8.decode(
+          base64Url.decode(base64Url.normalize(parts[1])),
+        );
+        final payload = json.decode(payloadJson) as Map<String, dynamic>;
+        final exp = payload['exp'];
+        if (exp is int) {
+          return DateTime.fromMillisecondsSinceEpoch(exp * 1000);
+        }
+      }
+    } catch (_) {}
+    return DateTime.now().add(const Duration(days: tokenDurationDays));
+  }
+
   // ==================== TOKEN MANAGEMENT ====================
   static Future<void> _saveTokenToPrefs() async {
     if (_jwtToken != null && _tokenExpiry != null) {
@@ -88,33 +106,7 @@ class AuthApiService {
           : rawToken.trim();
 
       _jwtToken = token;
-
-      // พยายามอ่าน exp จาก payload
-      try {
-        final parts = token.split('.');
-        if (parts.length == 3) {
-          final payloadJson = utf8.decode(
-            base64Url.decode(base64Url.normalize(parts[1])),
-          );
-          final payload = json.decode(payloadJson) as Map<String, dynamic>;
-          final exp = payload['exp'];
-          if (exp is int) {
-            _tokenExpiry = DateTime.fromMillisecondsSinceEpoch(exp * 1000);
-          } else {
-            _tokenExpiry = DateTime.now().add(
-              const Duration(days: tokenDurationDays),
-            );
-          }
-        } else {
-          _tokenExpiry = DateTime.now().add(
-            const Duration(days: tokenDurationDays),
-          );
-        }
-      } catch (_) {
-        _tokenExpiry = DateTime.now().add(
-          const Duration(days: tokenDurationDays),
-        );
-      }
+      _tokenExpiry = _expiryFromTokenOrDefault(token);
 
       ApiServer.updateAuthHeaders(_jwtToken!);
       await _saveTokenToPrefs();
@@ -170,7 +162,7 @@ class AuthApiService {
         }
       } else if (response.statusCode == 401) {
         if (kDebugMode) {
-          print('❌ Token validation failed: Token expired');
+          print('❌ Token validation failed: ${response.body}');
         }
         await clearAuth();
       }
@@ -199,6 +191,7 @@ class AuthApiService {
     String password,
   ) async {
     try {
+      print(ApiServer.currentBaseUrl);
       final response = await http
           .post(
             Uri.parse('${ApiServer.currentBaseUrl}/api/auth/login'),
@@ -230,9 +223,7 @@ class AuthApiService {
 
         if (token != null && token.isNotEmpty) {
           _jwtToken = token;
-          _tokenExpiry = DateTime.now().add(
-            const Duration(days: tokenDurationDays),
-          );
+          _tokenExpiry = _expiryFromTokenOrDefault(token);
           _lastActivity = DateTime.now();
 
           ApiServer.updateAuthHeaders(_jwtToken!);
@@ -388,23 +379,35 @@ class AuthApiService {
       };
     }
   }
-  // เพิ่มเมธอดนี้ในคลาส AuthApiService
 
+  // ==================== PROFILE ====================
   static Future<Map<String, dynamic>> updateProfile({
     String? name,
     String? userTel,
     String? username,
   }) async {
     try {
+      String _t(String s) => s.trim();
+
       final payload = <String, dynamic>{
-        if (name != null) 'name': name,
-        if (userTel != null) 'user_tel': userTel,
-        if (username != null) 'username': username,
+        if (name != null && _t(name).isNotEmpty) 'name': _t(name),
+        if (userTel != null && _t(userTel).isNotEmpty) 'user_tel': _t(userTel),
+        if (username != null && _t(username).isNotEmpty)
+          'username': _t(username),
       };
+
+      // ป้องกันยิงว่าง ๆ
+      if (payload.isEmpty) {
+        return {
+          'success': false,
+          'error': 'nothing_to_update_client',
+          'message': 'กรุณากรอกอย่างน้อย 1 ช่องก่อนบันทึก',
+        };
+      }
 
       final r = await http.put(
         Uri.parse('${ApiServer.currentBaseUrl}/api/auth/profile'),
-        headers: ApiServer.defaultHeaders,
+        headers: ApiServer.jsonHeaders, // ✅ ต้องเป็น JSON header
         body: jsonEncode(payload),
       );
 
@@ -421,30 +424,29 @@ class AuthApiService {
     String? confirmPassword,
   }) async {
     final payload = <String, dynamic>{
-      'current_password': currentPassword,
-      'new_password': newPassword,
-      // ถ้าไม่ได้ส่งมาก็เท่ากับ newPassword ให้เลย เพื่อให้ผ่านฝั่งเซิร์ฟเวอร์
-      'confirm_password': confirmPassword ?? newPassword,
+      'current_password': currentPassword.trim(),
+      'new_password': newPassword.trim(),
+      'confirm_password': (confirmPassword ?? newPassword).trim(),
     };
 
     try {
-      // ยิงเส้นทางหลักก่อน
+      // เส้นทางหลัก
       var resp = await http
           .put(
             Uri.parse('${ApiServer.currentBaseUrl}/api/auth/profile/password'),
-            headers: ApiServer.defaultHeaders,
+            headers: ApiServer.jsonHeaders, // ✅ JSON header สำคัญมาก
             body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 30));
 
       var body = ApiServer.handleResponse(resp);
 
-      // ถ้ายังไม่พบ endpoint (404) หรือฝั่งเซิร์ฟเวอร์ตอบ not_found ให้ fallback ไป alias เดิม
+      // Fallback เส้นทาง alias
       if (resp.statusCode == 404 || body['error'] == 'not_found') {
         resp = await http
             .put(
               Uri.parse('${ApiServer.currentBaseUrl}/api/auth/change-password'),
-              headers: ApiServer.defaultHeaders,
+              headers: ApiServer.jsonHeaders,
               body: jsonEncode(payload),
             )
             .timeout(const Duration(seconds: 30));

@@ -1,4 +1,6 @@
 // lib/screens/inspection_page.dart
+import 'dart:io' show File;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 
@@ -61,11 +63,14 @@ class _InspectionPageState extends State<InspectionPage> {
   }
 
   // >>> เงื่อนไขกดปุ่มเพิ่มรอบ <<<
-  bool get _canAddRound =>
-      _isConnected &&
-      !_busy &&
-      _selectedFieldId != null &&
-      _selectedZoneId != null;
+  //  bool get _canAddRound =>
+  //      _isConnected && !_busy && _selectedFieldId != null && _selectedZoneId != null;
+  bool get _canAddRound {
+    return _isConnected &&
+        !_busy &&
+        _selectedFieldId != null &&
+        _selectedZoneId != null;
+  }
 
   void _handleAddRoundPressed() {
     if (_busy) return;
@@ -139,7 +144,6 @@ class _InspectionPageState extends State<InspectionPage> {
         if (conn['success'] == true) {
           setState(() {
             _isConnected = true;
-            _status = 'เชื่อมต่อเซิร์ฟเวอร์แล้ว: ${conn['server_url']}';
             _lastConnectionCheck = DateTime.now().toString().substring(0, 19);
           });
           return;
@@ -171,16 +175,9 @@ class _InspectionPageState extends State<InspectionPage> {
     }
   }
 
-  // Enhanced image validation
+  // Enhanced image validation (รองรับทั้ง Web(bytes) และ มือถือ(path))
   Future<bool> _validateImages(List<PlatformFile> files) async {
     for (final file in files) {
-      if (file.size > maxFileSize) {
-        _showErrorDialog(
-          'ไฟล์ใหญ่เกินไป',
-          'ไฟล์ ${file.name} มีขนาด ${(file.size / (1024 * 1024)).toStringAsFixed(1)} MB\nขนาดสูงสุดที่อนุญาต: ${maxFileSize ~/ (1024 * 1024)} MB',
-        );
-        return false;
-      }
       final extension = file.extension?.toLowerCase();
       if (extension == null || !allowedTypes.contains(extension)) {
         _showErrorDialog(
@@ -189,12 +186,32 @@ class _InspectionPageState extends State<InspectionPage> {
         );
         return false;
       }
-      if (file.bytes == null || file.bytes!.isEmpty) {
+      if (file.size > maxFileSize) {
         _showErrorDialog(
-          'ไฟล์เสียหาย',
-          'ไฟล์ ${file.name} ไม่มีข้อมูล กรุณาเลือกไฟล์ใหม่',
+          'ไฟล์ใหญ่เกินไป',
+          'ไฟล์ ${file.name} มีขนาด ${(file.size / (1024 * 1024)).toStringAsFixed(1)} MB\nขนาดสูงสุดที่อนุญาต: ${maxFileSize ~/ (1024 * 1024)} MB',
         );
         return false;
+      }
+
+      if (kIsWeb) {
+        if (file.bytes == null || file.bytes!.isEmpty) {
+          _showErrorDialog(
+            'ไฟล์เสียหาย',
+            'ไฟล์ ${file.name} ไม่มีข้อมูล กรุณาเลือกไฟล์ใหม่',
+          );
+          return false;
+        }
+      } else {
+        final hasBytes = file.bytes != null && file.bytes!.isNotEmpty;
+        final hasPath = file.path != null && file.path!.isNotEmpty;
+        if (!hasBytes && !hasPath) {
+          _showErrorDialog(
+            'ไฟล์ไม่พร้อม',
+            'ไฟล์ ${file.name} ไม่พบข้อมูลหรือที่อยู่ไฟล์',
+          );
+          return false;
+        }
       }
     }
     return true;
@@ -325,8 +342,6 @@ class _InspectionPageState extends State<InspectionPage> {
   void _onSelectField(int? fieldId) {
     setState(() {
       _selectedFieldId = fieldId;
-      _zones = [];
-      _selectedZoneId = null;
     });
     if (fieldId != null) _loadZones(fieldId);
   }
@@ -439,9 +454,10 @@ class _InspectionPageState extends State<InspectionPage> {
 
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.image,
+        type: FileType.custom, // ⬅️ ล็อกตามที่ server อนุญาต
         allowMultiple: true,
-        withData: true,
+        withData: kIsWeb, // ⬅️ Web ใช้ bytes, มือถือใช้ path
+        allowedExtensions: allowedTypes, // ⬅️ ให้ตรง ALLOWED_EXTS
       );
       if (result == null || result.files.isEmpty) return;
 
@@ -562,7 +578,7 @@ class _InspectionPageState extends State<InspectionPage> {
             : d;
         final images = (data['images'] as List?) ?? const [];
         final quota = (data['quota'] as Map?) ?? const {};
-        final used = (quota['used'] is int)
+        final used = (quota is Map && quota['used'] is int)
             ? quota['used'] as int
             : images.length;
 
@@ -743,6 +759,7 @@ class _InspectionPageState extends State<InspectionPage> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
+          // แก้ from withValues → withOpacity เพื่อความเข้ากันได้
           BoxShadow(
             color: Colors.grey.withOpacity(0.1),
             spreadRadius: 5,
@@ -1015,40 +1032,6 @@ class _InspectionPageState extends State<InspectionPage> {
                       labelText: 'เลือกโซน',
                       icon: Icons.location_on,
                     ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: _notesCtrl,
-                      enabled: !_busy && _isConnected,
-                      decoration: InputDecoration(
-                        labelText: 'รอบที่ / บันทึกเพิ่มเติม (optional)',
-                        prefixIcon: Icon(
-                          Icons.note_add,
-                          color: Colors.green[600],
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: Colors.grey[300]!),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(color: Colors.grey[300]!),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide(
-                            color: Colors.green[500]!,
-                            width: 2,
-                          ),
-                        ),
-                        filled: true,
-                        fillColor: Colors.grey[50],
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 16,
-                        ),
-                      ),
-                      maxLines: 2,
-                    ),
                   ],
                 ),
               ),
@@ -1080,7 +1063,10 @@ class _InspectionPageState extends State<InspectionPage> {
                           child: const Text('เริ่มรอบตรวจ'),
                         ),
                         _buildStyledButton(
-                          onPressed: (_inspectionId == null || !_isConnected)
+                          onPressed:
+                              (_inspectionId == null ||
+                                  !_isConnected ||
+                                  _uploadedCount >= maxImagesPerRound)
                               ? null
                               : _pickImages,
                           icon: Icons.photo_library,
@@ -1199,12 +1185,17 @@ class _InspectionPageState extends State<InspectionPage> {
                                               bytes,
                                               fit: BoxFit.cover,
                                             )
-                                          : const Center(
-                                              child: Icon(
-                                                Icons.image_not_supported,
-                                                color: Colors.grey,
-                                              ),
-                                            ),
+                                          : (pf.path != null
+                                                ? Image.file(
+                                                    File(pf.path!),
+                                                    fit: BoxFit.cover,
+                                                  )
+                                                : const Center(
+                                                    child: Icon(
+                                                      Icons.image_not_supported,
+                                                      color: Colors.grey,
+                                                    ),
+                                                  )),
                                     ),
                                     Container(
                                       width: double.infinity,
@@ -1685,86 +1676,6 @@ class _InspectionPageState extends State<InspectionPage> {
                                 trailing: Wrap(
                                   spacing: 6,
                                   crossAxisAlignment: WrapCrossAlignment.center,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: badgeColor.withOpacity(0.12),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        status,
-                                        style: TextStyle(
-                                          color: badgeColor,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ),
-                                    if (_isConnected)
-                                      PopupMenuButton<String>(
-                                        tooltip: 'อัปเดตสถานะ',
-                                        onSelected: (v) async {
-                                          final rid = id is int
-                                              ? id
-                                              : int.tryParse('$id') ?? 0;
-                                          if (v == 'applied') {
-                                            final now = DateTime.now();
-                                            final dd =
-                                                '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-                                            await _updateRecStatus(
-                                              recommendationId: rid,
-                                              status: 'applied',
-                                              appliedDate: dd,
-                                            );
-                                          } else {
-                                            await _updateRecStatus(
-                                              recommendationId: rid,
-                                              status: v,
-                                            );
-                                          }
-                                        },
-                                        itemBuilder: (_) => const [
-                                          PopupMenuItem(
-                                            value: 'suggested',
-                                            child: Row(
-                                              children: [
-                                                Icon(Icons.pending, size: 16),
-                                                SizedBox(width: 8),
-                                                Text('รอการดำเนินการ'),
-                                              ],
-                                            ),
-                                          ),
-                                          PopupMenuItem(
-                                            value: 'applied',
-                                            child: Row(
-                                              children: [
-                                                Icon(
-                                                  Icons.check_circle,
-                                                  size: 16,
-                                                ),
-                                                SizedBox(width: 8),
-                                                Text('ดำเนินการแล้ว'),
-                                              ],
-                                            ),
-                                          ),
-                                          PopupMenuItem(
-                                            value: 'skipped',
-                                            child: Row(
-                                              children: [
-                                                Icon(Icons.skip_next, size: 16),
-                                                SizedBox(width: 8),
-                                                Text('ข้าม'),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                        child: const Icon(Icons.more_vert),
-                                      ),
-                                  ],
                                 ),
                               ),
                             );

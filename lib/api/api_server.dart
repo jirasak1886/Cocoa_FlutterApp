@@ -21,6 +21,7 @@ class UploadByteFile {
 class ApiServer {
   // ======================== CONFIG =========================
   static const List<String> alternativeUrls = [
+    baseUrl, // มาจาก utils/variable.dart
     'http://127.0.0.1:5000',
     'http://localhost:5000',
     'http://10.0.2.2:5000', // Android emulator
@@ -321,11 +322,15 @@ class ApiServer {
     String endpoint, {
     Map<String, String>? fields,
     List<File>? files,
-    String fileFieldName = 'files',
+    String fileFieldName = 'images', // ✅ ตั้งค่าเริ่มต้นเป็น 'images'
   }) async {
     try {
       final url = Uri.parse('$currentBaseUrl$endpoint');
       final req = http.MultipartRequest('POST', url);
+
+      if (kDebugMode) {
+        print('🖼️ Multipart upload → $endpoint');
+      }
 
       // เฮดเดอร์ฐาน + Authorization (อย่าตั้ง content-type เอง)
       final headers = Map<String, String>.from(defaultHeaders);
@@ -340,7 +345,14 @@ class ApiServer {
       final List<File> safeFiles = (files ?? <File>[])
           .where((f) => f.existsSync())
           .toList();
-      for (final f in safeFiles) {
+
+      // ✅ จำกัดสูงสุด 5 รูป (กัน user เลือกเกิน)
+      final toUpload = safeFiles.take(5).toList();
+      if (kDebugMode) {
+        print('🖼️ Files (path) count: ${toUpload.length}');
+      }
+
+      for (final f in toUpload) {
         req.files.add(await http.MultipartFile.fromPath(fileFieldName, f.path));
       }
 
@@ -370,11 +382,15 @@ class ApiServer {
     Map<String, String>? fields,
     required List<({List<int> bytes, String filename, String? contentType})>
     files,
-    String fileFieldName = 'files',
+    String fileFieldName = 'images', // ✅ ตั้งค่าเริ่มต้นเป็น 'images'
   }) async {
     try {
       final url = Uri.parse('$currentBaseUrl$endpoint');
       final req = http.MultipartRequest('POST', url);
+
+      if (kDebugMode) {
+        print('🖼️ Multipart (bytes) upload → $endpoint');
+      }
 
       // ใส่ header พื้นฐาน (อย่ากำหนด Content-Type เอง ให้ http จัดการ boundary)
       final headers = Map<String, String>.from(defaultHeaders);
@@ -385,8 +401,14 @@ class ApiServer {
         req.fields.addAll(fields);
       }
 
+      // ✅ จำกัดสูงสุด 5 รูป (กัน user ใส่เกิน)
+      final limited = files.take(5).toList();
+      if (kDebugMode) {
+        print('🖼️ Files (bytes) count: ${limited.length}');
+      }
+
       // แนบไฟล์จาก bytes
-      for (final f in files) {
+      for (final f in limited) {
         final mime = (f.contentType ?? _guessMimeFromName(f.filename));
         final parts = mime.split('/');
         final type = parts.first;
