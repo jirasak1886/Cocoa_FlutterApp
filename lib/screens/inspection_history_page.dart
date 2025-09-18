@@ -2,7 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:cocoa_app/api/field_api.dart';
 import 'package:cocoa_app/api/inspection_api.dart';
-// 👇 เพิ่ม import หน้าสถิติ
+import 'package:cocoa_app/api/api_server.dart';
+// 👇 ปุ่มไปหน้าสถิติ (เดิมของคุณ)
 import 'package:cocoa_app/screens/inspection_stats_page.dart';
 
 class InspectionHistoryPage extends StatefulWidget {
@@ -23,13 +24,19 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
   List<Map<String, dynamic>> _fields = [];
   List<Map<String, dynamic>> _zones = [];
 
-  // ✅ ใช้ groups ที่เราสร้างเองจาก res['buckets']
+  /// ✅ groups ที่แปลงมาจาก /history (ทีละเดือน/ปี)
   List<Map<String, dynamic>> _groups = [];
 
-  // โหลดคำแนะนำปุ๋ยต่อกลุ่ม
+  /// โหลดคำแนะนำปุ๋ยต่อกลุ่ม
   final Map<String, bool> _fertLoading = {};
   final Map<String, List<Map<String, dynamic>>> _fertByKey = {};
-  static const int _maxRecsFetch = 20;
+  static const int _maxRecsFetch = 50;
+
+  /// ✅ แคชภาพต่อ "รอบตรวจ" (inspection_id -> list image urls)
+  final Map<int, List<String>> _imageUrlsByInspection = {};
+
+  /// ✅ meta ต่อรอบ (inspection_id -> {'inspected_at': ..., 'field_name': ..., 'zone_name': ...})
+  final Map<int, Map<String, dynamic>> _inspMeta = {};
 
   @override
   void initState() {
@@ -38,6 +45,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     _loadHistory();
   }
 
+  // ---------- helpers ----------
   static const _thaiMonths = [
     '',
     'ม.ค.',
@@ -78,11 +86,56 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     return '${d.year}-$mm-$dd';
   }
 
+  String _fmtDTLocal(dynamic v) {
+    final dt = _parseDT(v);
+    if (dt == null) return '-';
+    final d = dt.toLocal();
+    final y = d.year;
+    final m = d.month;
+    final dd = d.day.toString().padLeft(2, '0');
+    final hh = d.hour.toString().padLeft(2, '0');
+    final mm = d.minute.toString().padLeft(2, '0');
+    final ss = d.second.toString().padLeft(2, '0');
+    return '$dd ${_thaiMonths[m]} $y $hh:$mm:$ss';
+  }
+
+  DateTime? _parseDT(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString().trim();
+    if (s.isEmpty) return null;
+    try {
+      // เผื่อบาง backend ส่งด้วยเครื่องหมาย / ให้ normalize เป็น -
+      return DateTime.parse(s.replaceAll('/', '-'));
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _toast(String m) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
+  /// ✅ สร้าง URL รูปให้ตรงเสมอ (supports absolute / relative / already has static/uploads)
+  String _imageUrl(String rel) {
+    final s = rel.trim();
+    if (s.isEmpty) return s;
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+
+    String path = s;
+    if (path.startsWith('/')) path = path.substring(1);
+    final hasStatic = path.startsWith('static/uploads/');
+    final base = ApiServer.currentBaseUrl.replaceAll(RegExp(r'/+$'), '');
+
+    final url = hasStatic ? '$base/$path' : '$base/static/uploads/$path';
+
+    // ล้าง // ซ้อนๆ (ยกเว้นหลัง http(s)://)
+    return url
+        .replaceFirstMapped(RegExp(r'^(https?:)//+'), (m) => '${m[1]}//')
+        .replaceAll(RegExp(r'(?<!:)//+'), '/');
+  }
+
+  // ---------- data loaders ----------
   Future<void> _loadFields() async {
     final res = await FieldApiService.getFields();
     if (!mounted) return;
@@ -154,7 +207,6 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     setState(() => _loading = false);
 
     if (res['success'] == true) {
-      // ✅ แปลง buckets → groups ที่ UI ใช้
       final List buckets = res['buckets'] ?? [];
       final List tops = res['top_nutrients'] ?? [];
       final groupType = (res['group'] ?? _group).toString();
@@ -175,7 +227,7 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
         }
 
         out.add({
-          'key': bucket, // ใช้สำหรับ map โหลดคำแนะนำ
+          'key': bucket,
           'label': bucket,
           'year': year,
           if (groupType == 'month' && month != null) 'month': month,
@@ -204,12 +256,16 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
       month = _asInt(g['month'], _month);
     }
 
-    setState(() => _fertLoading[key] = true);
+    // ✅ เคลียร์ cache ของกลุ่มนี้ก่อน กันค้างจากรอบอื่น
+    setState(() {
+      _fertLoading[key] = true;
+      _fertByKey[key] = [];
+    });
 
     // 1) ดึงรายการรอบในช่วง
     final lr = await InspectionApi.listInspections(
       page: 1,
-      pageSize: 100,
+      pageSize: 200,
       year: year,
       month: month,
       fieldId: _fieldId,
@@ -221,28 +277,68 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     final List items =
         (lr['items'] ?? lr['data'] ?? lr['inspections'] ?? []) as List;
 
-    // 2) ไล่ดึง recommendation ต่อ inspection (จำกัด _maxRecsFetch)
+    // 2) ไล่โหลด detail ของรอบเพื่อ: meta + thumbnails และ recs
     final recs = <Map<String, dynamic>>[];
+    final seenIds = <int>{};
+
     for (final it in items.take(_maxRecsFetch)) {
       final m = Map<String, dynamic>.from(it as Map);
       final id = _asInt(
         m['inspection_id'] ?? m['id'] ?? m['inspectionId'] ?? 0,
       );
       if (id <= 0) continue;
+      seenIds.add(id);
 
-      final rr = await InspectionApi.getRecommendations(inspectionId: id);
-      if (rr['success'] == true) {
-        final List d = rr['data'] ?? rr['recommendations'] ?? [];
-        recs.addAll(d.map((e) => Map<String, dynamic>.from(e as Map)));
+      // 2.1 detail → เอา inspected_at, field/zone, และภาพ
+      try {
+        final dd = await InspectionApi.getInspectionDetail(id);
+        if (dd['success'] == true) {
+          final data = (dd['data'] is Map<String, dynamic>)
+              ? dd['data'] as Map<String, dynamic>
+              : dd;
+          final head = (data['inspection'] ?? {}) as Map<String, dynamic>;
+          final imgs = (data['images'] as List? ?? const [])
+              .whereType<Map>()
+              .map((e) => (e['image_path'] ?? '').toString())
+              .where((s) => s.trim().isNotEmpty)
+              .map(_imageUrl)
+              .toList();
+
+          _inspMeta[id] = {
+            'inspected_at': head['inspected_at'] ?? head['created_at'],
+            'field_name': head['field_name'] ?? '-',
+            'zone_name': head['zone_name'] ?? '-',
+            'round_no': head['round_no'],
+          };
+          _imageUrlsByInspection[id] = imgs;
+        }
+      } catch (_) {
+        // ข้าม ถ้าโหลด detail พลาด
       }
+
+      // 2.2 recs ของรอบนี้
+      try {
+        final rr = await InspectionApi.getRecommendations(inspectionId: id);
+        if (rr['success'] == true) {
+          final List d = rr['data'] ?? rr['recommendations'] ?? [];
+          for (final e in d) {
+            final mm = Map<String, dynamic>.from(e as Map);
+            mm['__insp_id'] = id; // ผูกกลับรอบ
+            recs.add(mm);
+          }
+        }
+      } catch (_) {}
     }
+
+    // 3) ล้างแคชภาพของรอบอื่นที่ไม่อยู่ในช่วงนี้
+    _imageUrlsByInspection.removeWhere((k, v) => !seenIds.contains(k));
 
     _fertByKey[key] = recs;
     _fertLoading[key] = false;
     if (mounted) setState(() {});
   }
 
-  // ===== UI parts =====
+  // ---------- UI parts ----------
   Widget _buildHeader() {
     final now = DateTime.now();
     final years = List<int>.generate(6, (i) => now.year - i);
@@ -418,12 +514,31 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
     final recsLoading = _fertLoading[key] == true;
     final recs = _fertByKey[key] ?? [];
 
+    // 👉 รวมเป็นราย “รอบตรวจ”
+    final Map<int, List<Map<String, dynamic>>> byInsp = {};
+    for (final r in recs) {
+      final inspId = _asInt(r['__insp_id'], 0);
+      if (inspId <= 0) continue;
+      byInsp.putIfAbsent(inspId, () => []).add(r);
+    }
+
+    // 👉 เรียง “รอบ” ด้วยวันที่จริง (ใหม่ก่อน)
+    final inspIds = byInsp.keys.toList()
+      ..sort((a, b) {
+        final da = _parseDT(_inspMeta[a]?['inspected_at']);
+        final db = _parseDT(_inspMeta[b]?['inspected_at']);
+        if (da == null && db == null) return b.compareTo(a);
+        if (da == null) return 1;
+        if (db == null) return -1;
+        return db.compareTo(da);
+      });
+
     return Card(
       child: ExpansionTile(
         title: Text(label),
         subtitle: Text('รอบตรวจ: $inspections • findings: $findings'),
         trailing: IconButton(
-          tooltip: 'โหลดคำแนะนำปุ๋ยของช่วงนี้',
+          tooltip: 'โหลดคำแนะนำปุ๋ยและภาพของช่วงนี้',
           icon: const Icon(Icons.spa_outlined),
           onPressed: recsLoading ? null : () => _loadFertsForGroup(g),
         ),
@@ -465,40 +580,155 @@ class _InspectionHistoryPageState extends State<InspectionHistoryPage> {
                 style: TextStyle(color: Colors.grey[600]),
               ),
             ),
-          if (recs.isNotEmpty)
+          if (!recsLoading && recs.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
               child: Column(
-                children: recs.map((r) {
-                  final nutrient = (r['nutrient_code'] ?? r['nutrient'] ?? '-')
-                      .toString();
-                  final fertName =
-                      (r['fert_name'] ??
-                              r['fertilizer'] ??
-                              r['product_name'] ??
-                              '-')
-                          .toString();
-                  final form = (r['formulation'] ?? '').toString();
-                  final rate =
-                      (r['rate_per_area'] ?? r['dosage'] ?? r['dose'] ?? '-')
-                          .toString();
-                  final method = (r['application_method'] ?? '').toString();
-                  final status = (r['status'] ?? 'suggested').toString();
+                children: inspIds.map((inspId) {
+                  final meta = _inspMeta[inspId] ?? {};
+                  final when = _fmtDTLocal(meta['inspected_at']);
+                  final fieldName = (meta['field_name'] ?? '-').toString();
+                  final zoneName = (meta['zone_name'] ?? '-').toString();
+                  final roundNo = meta['round_no'];
+                  final thumbs = _imageUrlsByInspection[inspId] ?? const [];
 
-                  final productLabel = form.isNotEmpty
-                      ? '$fertName ($form)'
-                      : fertName;
-                  final sub = [
-                    if (rate.isNotEmpty) 'อัตรา: $rate',
-                    if (method.isNotEmpty) method,
-                    status,
-                  ].join(' • ');
+                  final rs = byInsp[inspId]!;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.green[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.green[100]!),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Header รอบ
+                          Row(
+                            children: [
+                              const Icon(Icons.flag, size: 18),
+                              const SizedBox(width: 6),
+                              Text(
+                                'รอบที่ ${roundNo ?? "-"} • $when',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.green[800],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$fieldName • $zoneName',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.green[700],
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          // แถวภาพรอบนี้
+                          if (thumbs.isNotEmpty)
+                            SizedBox(
+                              height: 84,
+                              child: ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                itemCount: thumbs.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(width: 8),
+                                itemBuilder: (_, i) {
+                                  final u = thumbs[i];
+                                  return ClipRRect(
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: AspectRatio(
+                                      aspectRatio: 4 / 3,
+                                      child: Image.network(
+                                        u,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Container(
+                                          width: 120,
+                                          color: Colors.grey[200],
+                                          child: const Icon(
+                                            Icons.broken_image,
+                                            color: Colors.grey,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          if (thumbs.isEmpty)
+                            Container(
+                              height: 40,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                '— ไม่มีภาพ —',
+                                style: TextStyle(color: Colors.grey[600]),
+                              ),
+                            ),
+                          const SizedBox(height: 6),
+                          // รายการคำแนะนำของรอบนี้
+                          ...rs.map((r) {
+                            final nutrient =
+                                (r['nutrient_code'] ?? r['nutrient'] ?? '-')
+                                    .toString();
+                            final fertName =
+                                (r['fert_name'] ??
+                                        r['fertilizer'] ??
+                                        r['product_name'] ??
+                                        '-')
+                                    .toString();
+                            final form = (r['formulation'] ?? '').toString();
+                            final rate =
+                                (r['rate_per_area'] ??
+                                        r['dosage'] ??
+                                        r['dose'] ??
+                                        '-')
+                                    .toString();
+                            final method = (r['application_method'] ?? '')
+                                .toString();
+                            final status = (r['status'] ?? 'suggested')
+                                .toString();
 
-                  return ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.spa_outlined),
-                    title: Text('$nutrient • $productLabel'),
-                    subtitle: Text(sub),
+                            final productLabel = form.isNotEmpty
+                                ? '$fertName ($form)'
+                                : fertName;
+
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 4.0,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(
+                                    width: 28,
+                                    child: Icon(Icons.spa_outlined, size: 18),
+                                  ),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '$nutrient • $productLabel',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
                   );
                 }).toList(),
               ),

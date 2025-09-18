@@ -36,15 +36,15 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
   List<Map<String, dynamic>> _fields = [];
   List<Map<String, dynamic>> _zones = [];
 
-  // data
-  List<Map<String, dynamic>> _buckets =
-      []; // [{bucket:'2025-09', inspections:int, findings:int}]
-  List<Map<String, dynamic>> _topNutrients =
-      []; // [{nutrient_code:'K', cnt:int}]
-
-  // KPI
+  // current period data
+  List<Map<String, dynamic>> _buckets = []; // [{bucket, inspections, findings}]
+  List<Map<String, dynamic>> _topNutrients = []; // [{nutrient_code, cnt}]
   int _totalInspections = 0;
   int _totalFindings = 0;
+
+  // previous period (for MoM/YoY)
+  int _prevTotalInspections = 0;
+  int _prevTotalFindings = 0;
 
   static const _thaiMonths = [
     '',
@@ -65,15 +65,14 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
   @override
   void initState() {
     super.initState();
-    // init from arguments
     _group = (widget.initialGroup == 'year') ? 'year' : 'month';
     _year = widget.initialYear ?? _year;
     _month = widget.initialMonth ?? _month;
     _fieldId = widget.initialFieldId;
     _zoneId = widget.initialZoneId;
 
-    _loadFields(); // โหลดรายการแปลงก่อน
-    _loadStats(); // โหลดสถิติ
+    _loadFields();
+    _loadStats();
   }
 
   String _mLabel(int m) => (m >= 1 && m <= 12) ? _thaiMonths[m] : '-';
@@ -90,6 +89,12 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
     final dd = d.day.toString().padLeft(2, '0');
     return '${d.year}-$mm-$dd';
   }
+
+  String _fmtPct(num v, {int digits = 1}) {
+    return '${(v * 100).toStringAsFixed(digits)}%';
+  }
+
+  double _safeDiv(num a, num b) => (b == 0) ? 0.0 : (a / b);
 
   Future<void> _loadFields() async {
     final res = await FieldApiService.getFields();
@@ -127,6 +132,7 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
     }
   }
 
+  // ---------- Load stats (current + previous period) ----------
   Future<void> _loadStats() async {
     setState(() {
       _loading = true;
@@ -134,9 +140,11 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
       _topNutrients = [];
       _totalFindings = 0;
       _totalInspections = 0;
+      _prevTotalFindings = 0;
+      _prevTotalInspections = 0;
     });
 
-    // ช่วงเวลา
+    // 1) ช่วงเวลาปัจจุบัน
     late DateTime from;
     late DateTime to;
     if (_group == 'year') {
@@ -148,7 +156,7 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
       to = DateTime(_year, _month, lastDay);
     }
 
-    final res = await InspectionApi.getHistory(
+    final curRes = await InspectionApi.getHistory(
       group: _group,
       from: _fmtDate(from),
       to: _fmtDate(to),
@@ -156,19 +164,40 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
       zoneId: _zoneId,
     );
 
+    // 2) ช่วงเวลาก่อนหน้า (month-1 หรือ year-1)
+    late DateTime pFrom;
+    late DateTime pTo;
+    if (_group == 'year') {
+      pFrom = DateTime(_year - 1, 1, 1);
+      pTo = DateTime(_year - 1, 12, 31);
+    } else {
+      final prev = DateTime(_year, _month, 1).subtract(const Duration(days: 1));
+      final lastDay = DateTime(prev.year, prev.month + 1, 0).day;
+      pFrom = DateTime(prev.year, prev.month, 1);
+      pTo = DateTime(prev.year, prev.month, lastDay);
+    }
+
+    final prevRes = await InspectionApi.getHistory(
+      group: _group,
+      from: _fmtDate(pFrom),
+      to: _fmtDate(pTo),
+      fieldId: _fieldId,
+      zoneId: _zoneId,
+    );
+
     if (!mounted) return;
     setState(() => _loading = false);
 
-    if (res['success'] == true) {
-      // รองรับทั้งโครงสร้างใหม่ (buckets/top_nutrients) หรือ groups (จาก utility normalized)
-      final List rawBuckets = (res['buckets'] ?? res['groups'] ?? []) as List;
-      final List rawTops = (res['top_nutrients'] ?? []) as List;
+    // ----- Map current -----
+    if (curRes['success'] == true) {
+      final List rawBuckets =
+          (curRes['buckets'] ?? curRes['groups'] ?? []) as List;
+      final List rawTops = (curRes['top_nutrients'] ?? []) as List;
 
       _buckets = rawBuckets
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
-
       _topNutrients = rawTops
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
@@ -182,20 +211,35 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
         0,
         (sum, b) => sum + _asInt(b['findings']),
       );
-
-      setState(() {});
     } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('โหลดสถิติไม่สำเร็จ: ${res['error'] ?? 'unknown'}'),
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('โหลดสถิติไม่สำเร็จ: ${curRes['error'] ?? 'unknown'}'),
+        ),
+      );
     }
+
+    // ----- Map previous -----
+    if (prevRes['success'] == true) {
+      final List rawBuckets =
+          (prevRes['buckets'] ?? prevRes['groups'] ?? []) as List;
+      final buckets = rawBuckets
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      _prevTotalInspections = buckets.fold<int>(
+        0,
+        (sum, b) => sum + _asInt(b['inspections']),
+      );
+      _prevTotalFindings = buckets.fold<int>(
+        0,
+        (sum, b) => sum + _asInt(b['findings']),
+      );
+    }
+    setState(() {});
   }
 
-  // ===== UI =====
+  // ---------- UI ----------
 
   Widget _buildFiltersCard() {
     final now = DateTime.now();
@@ -241,7 +285,6 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
             const SizedBox(height: 8),
             Row(
               children: [
-                // Year
                 Expanded(
                   child: DropdownButtonFormField<int>(
                     value: _year,
@@ -262,7 +305,6 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Month
                 if (_group == 'month')
                   Expanded(
                     child: DropdownButtonFormField<int>(
@@ -349,30 +391,159 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
     );
   }
 
-  Widget _buildKpiCard() {
+  Color _trendColor(double v) {
+    // findings/round มากขึ้น = เสี่ยงขึ้น ⇒ แดง, ลดลง ⇒ เขียว
+    if (v > 0.05) return Colors.red;
+    if (v < -0.05) return Colors.green;
+    return Colors.orange;
+  }
+
+  Widget _trendBadge(double change) {
+    final arrow = change > 0 ? '▲' : (change < 0 ? '▼' : '—');
+    final text = '${(change * 100).toStringAsFixed(1)}%';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: _trendColor(change).withOpacity(0.08),
+        border: Border.all(color: _trendColor(change).withOpacity(0.25)),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '$arrow $text',
+        style: TextStyle(color: _trendColor(change), fontSize: 12),
+      ),
+    );
+  }
+
+  Widget _buildDecisionPanel() {
+    final curRate = _safeDiv(_totalFindings, _totalInspections);
+    final prevRate = _safeDiv(_prevTotalFindings, _prevTotalInspections);
+    final delta = curRate - prevRate;
+
+    // ระดับความเสี่ยงตาม Findings/รอบ
+    String risk = 'ปกติ';
+    Color color = Colors.green;
+    if (curRate >= 1.2) {
+      risk = 'วิกฤต';
+      color = Colors.red;
+    } else if (curRate >= 0.7) {
+      risk = 'เสี่ยงสูง';
+      color = Colors.orange;
+    } else if (curRate >= 0.3) {
+      risk = 'เริ่มเสี่ยง';
+      color = Colors.amber;
+    }
+
+    final tips = <String>[
+      if (curRate >= 0.7) 'เร่ง “สั่งตรวจโมเดล” เพิ่มเติมในโซนที่พบถี่',
+      if (curRate >= 0.7) 'วางแผนใส่ปุ๋ยตามธาตุยอดฮิตในช่วงนี้',
+      if (curRate < 0.7 && curRate >= 0.3)
+        'ติดตามแนวโน้ม 2–3 สัปดาห์ พร้อมตรวจซ้ำ',
+      if (curRate < 0.3) 'คงความถี่การตรวจเดิม และดูสถิติรายโซน',
+    ];
+
     return Card(
+      color: color.withOpacity(0.06),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _Kpi(
-              title: 'จำนวนรอบตรวจ',
-              value: _totalInspections.toString(),
-              icon: Icons.fact_check_outlined,
+            Row(
+              children: [
+                Icon(Icons.policy_outlined, color: color),
+                const SizedBox(width: 8),
+                Text(
+                  'สรุปเพื่อการตัดสินใจ',
+                  style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                _trendBadge(delta),
+              ],
             ),
-            const SizedBox(width: 12),
-            _Kpi(
-              title: 'จำนวน findings',
-              value: _totalFindings.toString(),
-              icon: Icons.bug_report_outlined,
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _Kpi(
+                  title: 'จำนวนรอบตรวจ',
+                  value: '$_totalInspections',
+                  icon: Icons.fact_check_outlined,
+                ),
+                _Kpi(
+                  title: 'Findings ทั้งหมด',
+                  value: '$_totalFindings',
+                  icon: Icons.bug_report_outlined,
+                ),
+                _Kpi(
+                  title: 'Findings/รอบ',
+                  value: curRate.toStringAsFixed(2),
+                  icon: Icons.calculate_outlined,
+                ),
+              ],
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Chip(
+                  label: Text('ระดับความเสี่ยง: $risk'),
+                  backgroundColor: color.withOpacity(0.12),
+                  shape: StadiumBorder(
+                    side: BorderSide(color: color.withOpacity(0.35)),
+                  ),
+                  labelStyle: TextStyle(color: color.withOpacity(0.9)),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'เทียบช่วงก่อนหน้า: ${_fmtPct(delta.abs(), digits: 1)} ${delta >= 0 ? "สูงขึ้น" : "ลดลง"}',
+                  style: TextStyle(color: Colors.black54),
+                ),
+              ],
+            ),
+            if (tips.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: tips.map((t) => Text('• $t')).toList(),
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBucketsCard() {
+  Widget _miniBar({required int value, required int max}) {
+    final w = (max <= 0) ? 0.0 : (value / max);
+    return LayoutBuilder(
+      builder: (context, c) {
+        final width = (c.maxWidth * w).clamp(0.0, c.maxWidth);
+        return Stack(
+          children: [
+            Container(
+              height: 8,
+              decoration: BoxDecoration(
+                color: Colors.grey[200],
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              width: width,
+              height: 8,
+              decoration: BoxDecoration(
+                color: Colors.green[400],
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildBucketsTable() {
     if (_buckets.isEmpty) {
       return Card(
         child: Padding(
@@ -387,69 +558,90 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
 
     final maxIns = _buckets.fold<int>(
       0,
-      (m, b) => b['inspections'] is int
-          ? (b['inspections'] as int > m ? b['inspections'] as int : m)
-          : m,
+      (m, b) => (_asInt(b['inspections']) > m) ? _asInt(b['inspections']) : m,
     );
-    final maxFind = _buckets.fold<int>(
+    final maxFin = _buckets.fold<int>(
       0,
-      (m, b) => b['findings'] is int
-          ? (b['findings'] as int > m ? b['findings'] as int : m)
-          : m,
+      (m, b) => (_asInt(b['findings']) > m) ? _asInt(b['findings']) : m,
     );
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'การตรวจและ Findings ตามช่วงเวลา',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            const Padding(
+              padding: EdgeInsets.only(left: 4, bottom: 8),
+              child: Text(
+                'สรุปรายช่วง',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
-            const SizedBox(height: 12),
-            ..._buckets.map((b) {
-              final label = (b['bucket'] ?? b['label'] ?? '')
-                  .toString(); // "YYYY" หรือ "YYYY-MM"
-              final ins = _asInt(b['inspections'], 0);
-              final fin = _asInt(b['findings'], 0);
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(child: Text(label)),
-                        Text(
-                          'ตรวจ: $ins • f: $fin',
-                          style: const TextStyle(color: Colors.black54),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 40,
+                dataRowMinHeight: 44,
+                columns: const [
+                  DataColumn(label: Text('ช่วงเวลา')),
+                  DataColumn(label: Text('Inspections')),
+                  DataColumn(label: Text('Findings')),
+                  DataColumn(label: Text('Find/Ins')),
+                  DataColumn(label: Text('Mini Bar')),
+                ],
+                rows: _buckets.map((b) {
+                  final label = (b['bucket'] ?? b['label'] ?? '').toString();
+                  final ins = _asInt(b['inspections'], 0);
+                  final fin = _asInt(b['findings'], 0);
+                  final rate = _safeDiv(fin, ins);
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(label)),
+                      DataCell(Text('$ins')),
+                      DataCell(Text('$fin')),
+                      DataCell(Text(rate.toStringAsFixed(2))),
+                      DataCell(
+                        SizedBox(
+                          width: 140,
+                          child: _miniBar(
+                            value: fin,
+                            max: maxFin > 0 ? maxFin : 1,
+                          ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    _HBar(
-                      value: ins,
-                      max: (maxIns > 0 ? maxIns : 1),
-                      caption: 'Inspections',
-                    ),
-                    const SizedBox(height: 4),
-                    _HBar(
-                      value: fin,
-                      max: (maxFind > 0 ? maxFind : 1),
-                      caption: 'Findings',
-                    ),
-                  ],
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _HBar(
+                    value: _totalInspections,
+                    max: (maxIns > 0 ? maxIns : 1),
+                    caption: 'รวม Inspections',
+                  ),
                 ),
-              );
-            }),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _HBar(
+                    value: _totalFindings,
+                    max: (maxFin > 0 ? maxFin : 1),
+                    caption: 'รวม Findings',
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildTopNutrientsCard() {
+  Widget _buildTopNutrientsTable() {
     if (_topNutrients.isEmpty) {
       return Card(
         child: Padding(
@@ -462,6 +654,10 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
       );
     }
 
+    final totalCnt = _topNutrients.fold<int>(
+      0,
+      (s, r) => s + _asInt(r['cnt'], 0),
+    );
     final maxCnt = _topNutrients.fold<int>(0, (m, r) {
       final c = _asInt(r['cnt'], 0);
       return c > m ? c : m;
@@ -469,51 +665,52 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'สารอาหารที่พบมากสุด',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            const Padding(
+              padding: EdgeInsets.only(left: 4, bottom: 8),
+              child: Text(
+                'ธาตุที่พบมากสุด',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: _topNutrients.map((t) {
-                final code = (t['nutrient_code'] ?? t['code'] ?? '-')
-                    .toString();
-                final cnt = _asInt(t['cnt'], 0);
-                return Chip(
-                  label: Text('$code • $cnt'),
-                  backgroundColor: Colors.orange[50],
-                  shape: StadiumBorder(
-                    side: BorderSide(color: Colors.orange[200]!),
-                  ),
-                );
-              }).toList(),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 40,
+                dataRowMinHeight: 44,
+                columns: const [
+                  DataColumn(label: Text('Nutrient')),
+                  DataColumn(label: Text('จำนวน')),
+                  DataColumn(label: Text('สัดส่วน')),
+                  DataColumn(label: Text('Mini Bar')),
+                ],
+                rows: _topNutrients.map((t) {
+                  final code = (t['nutrient_code'] ?? t['code'] ?? '-')
+                      .toString();
+                  final cnt = _asInt(t['cnt'], 0);
+                  final share = _safeDiv(cnt, (totalCnt == 0 ? 1 : totalCnt));
+                  return DataRow(
+                    cells: [
+                      DataCell(Text(code)),
+                      DataCell(Text('$cnt')),
+                      DataCell(Text(_fmtPct(share))),
+                      DataCell(
+                        SizedBox(
+                          width: 140,
+                          child: _miniBar(
+                            value: cnt,
+                            max: maxCnt > 0 ? maxCnt : 1,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
             ),
-            const SizedBox(height: 12),
-            ..._topNutrients.map((t) {
-              final code = (t['nutrient_code'] ?? t['code'] ?? '-').toString();
-              final cnt = _asInt(t['cnt'], 0);
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(code),
-                    const SizedBox(height: 4),
-                    _HBar(
-                      value: cnt,
-                      max: (maxCnt > 0 ? maxCnt : 1),
-                      caption: '$cnt ครั้ง',
-                    ),
-                  ],
-                ),
-              );
-            }),
           ],
         ),
       ),
@@ -545,11 +742,11 @@ class _InspectionStatsPageState extends State<InspectionStatsPage> {
               child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
             ),
           if (!_loading) ...[
-            _buildKpiCard(),
+            _buildDecisionPanel(),
             const SizedBox(height: 12),
-            _buildBucketsCard(),
+            _buildBucketsTable(),
             const SizedBox(height: 12),
-            _buildTopNutrientsCard(),
+            _buildTopNutrientsTable(),
             const SizedBox(height: 40),
           ],
         ],
@@ -568,46 +765,46 @@ class _Kpi extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.green[50],
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.green.shade100),
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 20,
-              backgroundColor: Colors.green[100],
-              child: Icon(icon, color: Colors.green[800]),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+    return Container(
+      constraints: const BoxConstraints(minWidth: 160),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.green[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.shade100),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: Colors.green[100],
+            child: Icon(icon, color: Colors.green[800], size: 20),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(fontSize: 11, color: Colors.black54),
+              ),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
                 ),
-                Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-/// กราฟแท่งแนวนอนอย่างง่าย (ไม่ใช้แพ็กเกจเสริม)
+/// กราฟแท่งแนวนอนอย่างง่าย
 class _HBar extends StatelessWidget {
   final int value;
   final int max;
