@@ -35,7 +35,6 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _logout() async {
-    // แสดง confirmation dialog
     final shouldLogout = await _showLogoutConfirmation();
     if (!shouldLogout) return;
 
@@ -89,7 +88,6 @@ class _ProfilePageState extends State<ProfilePage> {
       "/profile/edit",
       arguments: userData,
     );
-    // ถ้าแก้ไขสำเร็จ จะ pop(true) กลับมา
     if (updated == true) {
       await _loadProfile();
       if (mounted) {
@@ -107,7 +105,6 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  // ฟังก์ชันตรวจสอบขนาดหน้าจอ
   bool _isLargeScreen(BuildContext context) {
     return MediaQuery.of(context).size.width >= 768;
   }
@@ -243,22 +240,12 @@ class _ProfilePageState extends State<ProfilePage> {
           padding: EdgeInsets.all(isLargeScreen ? 32 : 20),
           child: Column(
             children: [
-              // Profile Header Card
               _buildProfileHeaderCard(u, isLargeScreen),
-
               SizedBox(height: isLargeScreen ? 32 : 24),
-
-              // Profile Info Cards
               _buildProfileInfoCards(u, isLargeScreen),
-
               SizedBox(height: isLargeScreen ? 32 : 24),
-
-              // Token Info Card
               _buildTokenInfoCard(isLargeScreen),
-
               SizedBox(height: isLargeScreen ? 40 : 32),
-
-              // Action Buttons
               _buildActionButtons(isLargeScreen),
             ],
           ),
@@ -272,6 +259,9 @@ class _ProfilePageState extends State<ProfilePage> {
     final firstChar = userName.toString().trim().isNotEmpty
         ? userName.toString().trim().substring(0, 1).toUpperCase()
         : '?';
+
+    // ดึงอีเมลจาก payload (รองรับทั้ง user_email และ email)
+    final email = (u['user_email'] ?? u['email'] ?? '').toString();
 
     return Container(
       width: double.infinity,
@@ -328,8 +318,7 @@ class _ProfilePageState extends State<ProfilePage> {
               border: Border.all(color: Colors.green[200]!),
             ),
             child: Text(
-              'Username : '
-              "${u['username'] ?? '-'}",
+              'Username : ${u['username'] ?? '-'}',
               style: TextStyle(
                 fontSize: isLargeScreen ? 16 : 14,
                 fontWeight: FontWeight.w500,
@@ -337,12 +326,34 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ),
           ),
+
+          if (email.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            // Email badge (เล็ก ๆ ใต้ username)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.blue[200]!),
+              ),
+              child: Text(
+                'Email : $email',
+                style: TextStyle(
+                  fontSize: isLargeScreen ? 14 : 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.blue[700],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
   Widget _buildProfileInfoCards(Map<String, dynamic> u, bool isLargeScreen) {
+    final email = (u['user_email'] ?? u['email'] ?? 'ไม่ได้ระบุ').toString();
     return Column(
       children: [
         _buildInfoCard(
@@ -360,6 +371,9 @@ class _ProfilePageState extends State<ProfilePage> {
           Colors.purple,
           isLargeScreen,
         ),
+        SizedBox(height: isLargeScreen ? 16 : 12),
+        // ✅ การ์ดอีเมลที่เพิ่มเข้ามา
+        _buildInfoCard(Icons.email, 'อีเมล', email, Colors.teal, isLargeScreen),
       ],
     );
   }
@@ -491,7 +505,6 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget _buildActionButtons(bool isLargeScreen) {
     return Column(
       children: [
-        // Edit Profile Button
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
@@ -518,10 +531,7 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
           ),
         ),
-
         SizedBox(height: isLargeScreen ? 16 : 12),
-
-        // Logout Button
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(

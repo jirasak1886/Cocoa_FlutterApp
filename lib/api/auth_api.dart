@@ -1,9 +1,9 @@
-// auth_api.dart
-import 'package:cocoa_app/api/api_server.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+// lib/api/auth_api.dart
 import 'dart:async';
+import 'dart:convert';
+import 'package:cocoa_app/api/api_server.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthApiService {
@@ -28,20 +28,30 @@ class AuthApiService {
           return DateTime.fromMillisecondsSinceEpoch(exp * 1000);
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      /* ignore */
+    }
+    // fallback ถ้า parse ไม่ได้
     return DateTime.now().add(const Duration(days: tokenDurationDays));
   }
 
   // ==================== TOKEN MANAGEMENT ====================
   static Future<void> _saveTokenToPrefs() async {
-    if (_jwtToken != null && _tokenExpiry != null) {
+    try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('jwt_token', _jwtToken!);
-      await prefs.setString('token_expiry', _tokenExpiry!.toIso8601String());
+      await prefs.setString('jwt_token', _jwtToken ?? '');
+      await prefs.setString(
+        'token_expiry',
+        (_tokenExpiry ??
+                DateTime.now().add(const Duration(days: tokenDurationDays)))
+            .toIso8601String(),
+      );
       if (kDebugMode) {
-        print('💾 JWT Token saved to storage');
+        print('💾 JWT saved');
         print('⏰ Expiry: $_tokenExpiry');
       }
+    } catch (e) {
+      if (kDebugMode) print('❌ Save token error: $e');
     }
   }
 
@@ -49,33 +59,40 @@ class AuthApiService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('jwt_token');
-      final expiryString = prefs.getString('token_expiry');
+      final expiryStr = prefs.getString('token_expiry');
 
-      if (token != null && expiryString != null) {
-        final expiry = DateTime.parse(expiryString);
-        if (DateTime.now().isBefore(expiry)) {
-          _jwtToken = token;
-          _tokenExpiry = expiry;
-          _lastActivity = DateTime.now();
+      if (token == null || token.isEmpty) {
+        await _clearTokenFromPrefs();
+        return;
+      }
 
-          // อัปเดต ApiServer headers
-          ApiServer.updateAuthHeaders(_jwtToken!);
-          _startValidationTimer();
-
-          if (kDebugMode) {
-            print('🔄 JWT Token restored successfully');
-            print('⏰ Expires at: $expiry');
-            print(
-              '📅 Days remaining: ${expiry.difference(DateTime.now()).inDays}',
-            );
-          }
-        } else {
-          if (kDebugMode) print('❌ Stored token expired, clearing...');
-          await _clearTokenFromPrefs();
+      DateTime expiry;
+      if (expiryStr != null && expiryStr.isNotEmpty) {
+        try {
+          expiry = DateTime.parse(expiryStr);
+        } catch (_) {
+          expiry = _expiryFromTokenOrDefault(token);
         }
+      } else {
+        expiry = _expiryFromTokenOrDefault(token);
+      }
+
+      if (DateTime.now().isBefore(expiry)) {
+        _jwtToken = token;
+        _tokenExpiry = expiry;
+        _lastActivity = DateTime.now();
+        ApiServer.updateAuthHeaders(_jwtToken!);
+        _startValidationTimer();
+        if (kDebugMode) {
+          print('🔄 JWT restored');
+          print('⏰ Expires at: $_tokenExpiry');
+        }
+      } else {
+        if (kDebugMode) print('❌ Stored token expired');
+        await _clearTokenFromPrefs();
       }
     } catch (e) {
-      if (kDebugMode) print('❌ Error loading token: $e');
+      if (kDebugMode) print('❌ Load token error: $e');
       await _clearTokenFromPrefs();
     }
   }
@@ -89,37 +106,26 @@ class AuthApiService {
 
   static bool _isTokenExpired() {
     if (_tokenExpiry == null) return true;
-    final now = DateTime.now();
-    final isExpired = now.isAfter(_tokenExpiry!);
-    if (kDebugMode && isExpired) {
-      print('❌ Token expired: $_tokenExpiry');
-      print('🕐 Current time: $now');
-    }
-    return isExpired;
+    return DateTime.now().isAfter(_tokenExpiry!);
   }
 
-  // ✅ ตั้ง token จากภายนอก (เช่น คัดลอกมาวาง) และ decode exp อัตโนมัติ
+  // ✅ ตั้ง token จากภายนอก (เช่น temp_token หรือคัดลอกมา)
   static Future<void> setTokenFromExternal(String rawToken) async {
     try {
-      final token = rawToken.startsWith('Bearer ')
-          ? rawToken.substring(7).trim()
-          : rawToken.trim();
-
+      var token = rawToken.trim();
+      if (token.toLowerCase().startsWith('bearer ')) {
+        token = token.substring(7).trim();
+      }
       _jwtToken = token;
       _tokenExpiry = _expiryFromTokenOrDefault(token);
-
       ApiServer.updateAuthHeaders(_jwtToken!);
       await _saveTokenToPrefs();
       _startValidationTimer();
-
       if (kDebugMode) {
         print('✅ External JWT applied. Expires at: $_tokenExpiry');
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ setTokenFromExternal error: $e');
-      }
-      rethrow;
+      if (kDebugMode) print('❌ setTokenFromExternal error (ignored): $e');
     }
   }
 
@@ -129,9 +135,7 @@ class AuthApiService {
     _validationTimer = Timer.periodic(const Duration(hours: 1), (timer) async {
       await _validateToken();
     });
-    if (kDebugMode) {
-      print('🔄 Token validation timer started (1 hour intervals)');
-    }
+    if (kDebugMode) print('🔄 Token validation timer started');
   }
 
   static void _stopValidationTimer() {
@@ -147,29 +151,27 @@ class AuthApiService {
         return;
       }
 
-      final response = await http
-          .get(
-            Uri.parse('${ApiServer.currentBaseUrl}/api/auth/validate'),
-            headers: _getAuthHeaders(),
-          )
-          .timeout(const Duration(seconds: 10));
+      // ✅ ใช้ ApiServer wrapper เพื่อลดความเสี่ยง header/URL เพี้ยน
+      final resp = await ApiServer.get('/api/auth/validate');
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        if (data['success'] == true) {
-          _lastActivity = DateTime.now();
-          if (kDebugMode) print('💚 Token validation successful');
+      if ((resp['status'] ?? 0) == 200 && (resp['success'] == true)) {
+        _lastActivity = DateTime.now();
+        if (kDebugMode) print('💚 Token validation OK');
+        return;
+      }
+
+      if ((resp['status'] ?? 0) == 401) {
+        final err = (resp['error'] ?? '').toString();
+        if (['invalid_token', 'token_expired', 'token_revoked'].contains(err)) {
+          if (kDebugMode) print('❌ Token invalid ($err) → clear');
+          await clearAuth();
+        } else {
+          if (kDebugMode) print('⚠️ 401 ($err) but keep token for now');
         }
-      } else if (response.statusCode == 401) {
-        if (kDebugMode) {
-          print('❌ Token validation failed: ${response.body}');
-        }
-        await clearAuth();
       }
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ Token validation error: $e');
-      }
+      if (kDebugMode) print('❌ Token validation error: $e');
+      // network ผิดพลาด: อย่าล้าง token
     }
   }
 
@@ -179,8 +181,12 @@ class AuthApiService {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
-    if (_jwtToken != null) {
-      headers['Authorization'] = 'Bearer $_jwtToken';
+    if (_jwtToken != null && _jwtToken!.isNotEmpty) {
+      var t = _jwtToken!.trim();
+      if (t.toLowerCase().startsWith('bearer ')) {
+        t = t.substring(7).trim();
+      }
+      headers['Authorization'] = 'Bearer $t';
     }
     return headers;
   }
@@ -191,71 +197,46 @@ class AuthApiService {
     String password,
   ) async {
     try {
-      print(ApiServer.currentBaseUrl);
-      final response = await http
-          .post(
-            Uri.parse('${ApiServer.currentBaseUrl}/api/auth/login'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-            },
-            body: json.encode({'username': username, 'password': password}),
-          )
-          .timeout(const Duration(seconds: 30));
+      final res = await ApiServer.authLogin(
+        username: username,
+        password: password,
+      );
 
       if (kDebugMode) {
         print('🔐 Login attempt for: $username');
-        print('📤 Response status: ${response.statusCode}');
-        print('📝 Response body: ${response.body}');
+        print('📤 Response: $res');
       }
 
-      final responseData = json.decode(response.body);
-      if (response.statusCode == 200 && responseData['success'] == true) {
-        String? token;
-        Map<String, dynamic>? userData;
-        if (responseData['data'] != null) {
-          token = responseData['data']['token'];
-          userData = responseData['data']['user'];
-        } else {
-          token = responseData['token'];
-          userData = responseData['user'];
+      if (res['success'] == true && (res['token'] != null)) {
+        // ✅ normalize token ตั้งแต่ต้น (กัน Bearer ซ้อน/ช่องว่าง)
+        var token = (res['token'] as String).trim();
+        if (token.toLowerCase().startsWith('bearer ')) {
+          token = token.substring(7).trim();
         }
 
-        if (token != null && token.isNotEmpty) {
-          _jwtToken = token;
-          _tokenExpiry = _expiryFromTokenOrDefault(token);
-          _lastActivity = DateTime.now();
+        _jwtToken = token;
+        _tokenExpiry = _expiryFromTokenOrDefault(token);
+        _lastActivity = DateTime.now();
 
-          ApiServer.updateAuthHeaders(_jwtToken!);
-          await _saveTokenToPrefs();
-          _startValidationTimer();
+        ApiServer.updateAuthHeaders(_jwtToken!);
+        await _saveTokenToPrefs();
 
-          if (kDebugMode) {
-            print('🔑 JWT Token received and stored successfully');
-            print('⏰ Token expires at: $_tokenExpiry');
-          }
+        // ✅ กัน race: เว้นจังหวะสั้นๆ ก่อนที่หน้าถัดไปจะยิง validate
+        await Future.delayed(const Duration(milliseconds: 50));
 
-          return {
-            'success': true,
-            'message': responseData['message'] ?? 'เข้าสู่ระบบสำเร็จ',
-            'user': userData,
-            'token': token,
-          };
-        } else {
-          if (kDebugMode) {
-            print('❌ No token found in response');
-            print('📝 Full response: $responseData');
-          }
-          return {'success': false, 'message': 'ไม่พบ token ในการตอบกลับ'};
-        }
+        _startValidationTimer();
+
+        return {
+          'success': true,
+          'message': res['message'] ?? 'เข้าสู่ระบบสำเร็จ',
+          'user': res['user'],
+          'token': token,
+        };
       }
 
       return {
         'success': false,
-        'message':
-            responseData['error'] ??
-            responseData['message'] ??
-            'เข้าสู่ระบบล้มเหลว',
+        'message': res['message'] ?? 'เข้าสู่ระบบล้มเหลว',
       };
     } catch (e) {
       if (kDebugMode) print('❌ Login error: $e');
@@ -263,45 +244,35 @@ class AuthApiService {
     }
   }
 
+  /// รองรับ user_email (ต้องส่ง)
   static Future<Map<String, dynamic>> register(
     String username,
     String userTel,
+    String userEmail,
     String password,
     String confirmPassword,
     String name,
   ) async {
     try {
-      final response = await http
-          .post(
-            Uri.parse('${ApiServer.currentBaseUrl}/api/auth/register'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-            },
-            body: json.encode({
-              'username': username,
-              'user_tel': userTel,
-              'password': password,
-              'confirm_password': confirmPassword,
-              'name': name,
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
+      final res = await ApiServer.authRegister(
+        username: username,
+        userTel: userTel,
+        userEmail: userEmail,
+        password: password,
+        confirmPassword: confirmPassword,
+        name: name,
+      );
 
-      final responseData = json.decode(response.body);
-      if (response.statusCode == 201 && responseData['success'] == true) {
+      if (res['success'] == true) {
         return {
           'success': true,
-          'message': responseData['message'] ?? 'ลงทะเบียนสำเร็จ',
-          'user': responseData['data'],
+          'message': res['message'] ?? 'ลงทะเบียนสำเร็จ',
+          'user': res['data'],
         };
       } else {
         return {
           'success': false,
-          'message':
-              responseData['error'] ??
-              responseData['message'] ??
-              'ลงทะเบียนล้มเหลว',
+          'message': res['message'] ?? 'ลงทะเบียนล้มเหลว',
         };
       }
     } catch (e) {
@@ -313,7 +284,7 @@ class AuthApiService {
     try {
       await clearAuth();
       return {'success': true, 'message': 'ออกจากระบบสำเร็จ'};
-    } catch (e) {
+    } catch (_) {
       await clearAuth();
       return {'success': true, 'message': 'ออกจากระบบสำเร็จ'};
     }
@@ -334,44 +305,74 @@ class AuthApiService {
         };
       }
 
-      final response = await http
-          .get(
-            Uri.parse('${ApiServer.currentBaseUrl}/api/auth/validate'),
-            headers: _getAuthHeaders(),
-          )
-          .timeout(const Duration(seconds: 10));
+      // ✅ ใช้ ApiServer.get เพื่อให้ header/baseUrl สอดคล้อง
+      var resp = await ApiServer.get('/api/auth/validate');
 
-      if (response.statusCode == 200) {
-        final responseData = json.decode(response.body);
-        if (responseData['success'] == true &&
-            responseData['authenticated'] == true) {
-          _lastActivity = DateTime.now();
-          await _saveTokenToPrefs();
+      if ((resp['status'] ?? 0) == 200 &&
+          resp['success'] == true &&
+          (resp['authenticated'] == true || resp['ok'] == true)) {
+        _lastActivity = DateTime.now();
+        await _saveTokenToPrefs();
 
+        return {
+          'success': true,
+          'authenticated': true,
+          'user': resp['user'],
+          'remainingDays': _tokenExpiry != null
+              ? _tokenExpiry!.difference(DateTime.now()).inDays
+              : 0,
+          'remainingHours': _tokenExpiry != null
+              ? _tokenExpiry!.difference(DateTime.now()).inHours
+              : 0,
+        };
+      }
+
+      // ✅ กัน race: ถ้าได้ 401 โดยไม่มีเหตุผลชัดเจน ให้ retry 1 ครั้งหลังหน่วงสั้นๆ
+      if ((resp['status'] ?? 0) == 401) {
+        final err = (resp['error'] ?? '').toString();
+        if (![
+          'invalid_token',
+          'token_expired',
+          'token_revoked',
+        ].contains(err)) {
+          await Future.delayed(const Duration(milliseconds: 200));
+          resp = await ApiServer.get('/api/auth/validate');
+
+          if ((resp['status'] ?? 0) == 200 && resp['success'] == true) {
+            _lastActivity = DateTime.now();
+            await _saveTokenToPrefs();
+            return {
+              'success': true,
+              'authenticated': true,
+              'user': resp['user'],
+              'remainingDays': _tokenExpiry != null
+                  ? _tokenExpiry!.difference(DateTime.now()).inDays
+                  : 0,
+              'remainingHours': _tokenExpiry != null
+                  ? _tokenExpiry!.difference(DateTime.now()).inHours
+                  : 0,
+            };
+          }
+        }
+
+        // ถ้าเป็น error ที่ใช้ต่อไม่ได้จริง ค่อย clear
+        if (['invalid_token', 'token_expired', 'token_revoked'].contains(err)) {
+          await clearAuth();
           return {
-            'success': true,
-            'authenticated': true,
-            'user': responseData['user'],
-            'remainingDays': _tokenExpiry != null
-                ? _tokenExpiry!.difference(DateTime.now()).inDays
-                : 0,
-            'remainingHours': _tokenExpiry != null
-                ? _tokenExpiry!.difference(DateTime.now()).inHours
-                : 0,
+            'success': false,
+            'authenticated': false,
+            'message': 'Token ไม่ถูกต้อง',
           };
         }
       }
 
-      await clearAuth();
       return {
         'success': false,
         'authenticated': false,
-        'message': 'Token ไม่ถูกต้อง',
+        'message': 'ตรวจสอบสิทธิ์ไม่สำเร็จ',
       };
     } catch (e) {
-      if (kDebugMode) {
-        print('❌ Check auth error: $e');
-      }
+      if (kDebugMode) print('❌ Check auth error: $e');
       return {
         'success': false,
         'authenticated': false,
@@ -385,6 +386,7 @@ class AuthApiService {
     String? name,
     String? userTel,
     String? username,
+    String? userEmail,
   }) async {
     try {
       String _t(String s) => s.trim();
@@ -394,9 +396,10 @@ class AuthApiService {
         if (userTel != null && _t(userTel).isNotEmpty) 'user_tel': _t(userTel),
         if (username != null && _t(username).isNotEmpty)
           'username': _t(username),
+        if (userEmail != null && _t(userEmail).isNotEmpty)
+          'user_email': _t(userEmail),
       };
 
-      // ป้องกันยิงว่าง ๆ
       if (payload.isEmpty) {
         return {
           'success': false,
@@ -407,12 +410,11 @@ class AuthApiService {
 
       final r = await http.put(
         Uri.parse('${ApiServer.currentBaseUrl}/api/auth/profile'),
-        headers: ApiServer.jsonHeaders, // ✅ ต้องเป็น JSON header
+        headers: _getAuthHeaders(),
         body: jsonEncode(payload),
       );
 
-      final body = ApiServer.handleResponse(r);
-      return body;
+      return ApiServer.handleResponse(r);
     } catch (e) {
       return ApiServer.handleError(e);
     }
@@ -434,7 +436,7 @@ class AuthApiService {
       var resp = await http
           .put(
             Uri.parse('${ApiServer.currentBaseUrl}/api/auth/profile/password'),
-            headers: ApiServer.jsonHeaders, // ✅ JSON header สำคัญมาก
+            headers: _getAuthHeaders(),
             body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 30));
@@ -446,7 +448,7 @@ class AuthApiService {
         resp = await http
             .put(
               Uri.parse('${ApiServer.currentBaseUrl}/api/auth/change-password'),
-              headers: ApiServer.jsonHeaders,
+              headers: _getAuthHeaders(),
               body: jsonEncode(payload),
             )
             .timeout(const Duration(seconds: 30));
@@ -459,6 +461,67 @@ class AuthApiService {
     }
   }
 
+  // ==================== PASSWORD RESET (EMAIL OTP) ====================
+  /// 1) ส่ง OTP ไปอีเมล (แอปจงใจตอบ ok เสมอ)
+  static Future<Map<String, dynamic>> requestPasswordReset({
+    required String email,
+  }) async {
+    try {
+      final res = await ApiServer.requestPasswordReset(
+        email.trim().toLowerCase(),
+      );
+      return {
+        'success': res['ok'] == true || res['success'] == true,
+        'message': (res['ok'] == true)
+            ? 'ถ้ามีอีเมลนี้ในระบบ จะได้รับ OTP ภายในไม่กี่นาที'
+            : (res['message'] ?? 'ส่งคำขอแล้ว'),
+      };
+    } catch (_) {
+      return {'success': false, 'message': 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'};
+    }
+  }
+
+  /// 2) ยืนยัน OTP → ได้ temp_token
+  static Future<Map<String, dynamic>> verifyPasswordReset({
+    required String email,
+    required String otp,
+  }) async {
+    try {
+      final res = await ApiServer.verifyPasswordReset(email: email, otp: otp);
+      if (res['ok'] == true && res['temp_token'] != null) {
+        return {'success': true, 'tempToken': res['temp_token']};
+      }
+      return {
+        'success': false,
+        'message': res['message'] ?? 'รหัสยืนยันไม่ถูกต้องหรือหมดอายุ',
+      };
+    } catch (_) {
+      return {'success': false, 'message': 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'};
+    }
+  }
+
+  /// 3) ตั้งรหัสผ่านใหม่ (ใช้ temp_token)
+  static Future<Map<String, dynamic>> resetPasswordWithTempToken({
+    required String tempToken,
+    required String newPassword,
+  }) async {
+    try {
+      final res = await ApiServer.resetPassword(
+        tempToken: tempToken,
+        newPassword: newPassword,
+      );
+      if (res['ok'] == true || res['success'] == true) {
+        return {'success': true, 'message': 'รีเซ็ตรหัสผ่านสำเร็จ'};
+      }
+      return {
+        'success': false,
+        'message': res['message'] ?? 'ไม่สามารถรีเซ็ตรหัสผ่านได้',
+      };
+    } catch (_) {
+      return {'success': false, 'message': 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'};
+    }
+  }
+
   // ==================== HELPERS ====================
   static Future<void> clearAuth() async {
     if (kDebugMode) print('🗑️ Clearing JWT authentication...');
@@ -468,7 +531,7 @@ class AuthApiService {
     _stopValidationTimer();
     await _clearTokenFromPrefs();
     ApiServer.clearAuthHeaders();
-    if (kDebugMode) print('✅ JWT Authentication cleared successfully');
+    if (kDebugMode) print('✅ JWT cleared');
   }
 
   static bool hasAuth() =>

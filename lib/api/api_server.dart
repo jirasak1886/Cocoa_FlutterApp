@@ -46,7 +46,12 @@ class ApiServer {
 
   // ======================== TOKEN ==========================
   static void updateAuthHeaders(String token) {
-    _jwtToken = token;
+    // ✅ กัน token มี "Bearer " มาด้วย หรือมีช่องว่าง/ขึ้นบรรทัด
+    var t = token.trim();
+    if (t.toLowerCase().startsWith('bearer ')) {
+      t = t.substring(7).trim(); // ตัดคำว่า Bearer ออก ให้เหลือเฉพาะ JWT
+    }
+    _jwtToken = t;
     if (kDebugMode) print('🔑 JWT Token updated');
   }
 
@@ -81,16 +86,37 @@ class ApiServer {
   static Map<String, String> get defaultHeaders {
     final headers = <String, String>{'Accept': 'application/json'};
     if (hasAuthToken) {
-      headers['Authorization'] = 'Bearer $_jwtToken';
+      final t = _jwtToken!.trim(); // ✅ trim อีกรอบกันพลาด
+      headers['Authorization'] = 'Bearer $t';
     }
     return headers;
   }
 
-  /// เฮดเดอร์สำหรับ JSON (มี Content-Type)
+  /// เฮดเดอร์สำหรับ JSON (มี Content-Type) + แนบ JWT ปัจจุบันถ้ามี
   static Map<String, String> get jsonHeaders => {
     ...defaultHeaders,
     'Content-Type': 'application/json',
   };
+
+  /// เฮดเดอร์ JSON ที่ “เพิ่ม” ค่าเข้าไปบนฐาน defaultHeaders (ซึ่งอาจมี JWT อยู่)
+  /// ใช้กับเคสทั่วไปที่ต้องการแนบค่าเพิ่ม เช่น X-Whatever
+  static Map<String, String> jsonHeadersWith({Map<String, String>? extra}) {
+    return {...jsonHeaders, if (extra != null) ...extra};
+  }
+
+  /// ❗เฮดเดอร์ JSON แบบ “Exact” (ไม่แตะ defaultHeaders และไม่พก JWT ปกติ)
+  /// ใช้เมื่อจำเป็นต้องส่ง Authorization แบบพิเศษ เช่น temp token ของ reset password
+  static Map<String, String> jsonHeadersExact(String token) {
+    // NOTE: token ที่ส่งเข้ามาควรเป็น “ดิบ” (ไม่มีคำว่า Bearer)
+    final t = token.trim().toLowerCase().startsWith('bearer ')
+        ? token.trim().substring(7).trim()
+        : token.trim();
+    return {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $t',
+    };
+  }
 
   // =================== RESPONSE PARSING =====================
   static Map<String, dynamic> handleResponse(http.Response response) {
@@ -246,6 +272,55 @@ class ApiServer {
   static Future<Map<String, dynamic>> delete(String endpoint) async =>
       _httpRequest('DELETE', endpoint);
 
+  /// POST/PUT/PATCH ที่ต้องส่ง header เพิ่มเติม “บนฐาน JSON headers ปกติ (มี JWT ได้)”
+  static Future<Map<String, dynamic>> postWithHeaders(
+    String endpoint,
+    Map<String, dynamic> data, {
+    Map<String, String>? headers,
+  }) async {
+    try {
+      if (kDebugMode) {
+        print('🚀 POST (custom headers): $currentBaseUrl$endpoint');
+        print('📦 Data: $data');
+        print('🧾 Extra headers (merged over default): $headers');
+      }
+      final uri = Uri.parse('$currentBaseUrl$endpoint');
+      final response = await http
+          .post(
+            uri,
+            headers: jsonHeadersWith(extra: headers),
+            body: json.encode(data),
+          )
+          .timeout(const Duration(seconds: 60));
+      return handleResponse(response);
+    } catch (e) {
+      return handleError(e);
+    }
+  }
+
+  /// ❗POST แบบใช้ “exact headers” (จะไม่แนบ JWT ปกติ)
+  static Future<Map<String, dynamic>> postWithExactHeaders(
+    String endpoint,
+    Map<String, dynamic> data, {
+    required Map<String, String> exactHeaders,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    try {
+      if (kDebugMode) {
+        print('🚀 POST (EXACT headers): $currentBaseUrl$endpoint');
+        print('📦 Data: $data');
+        print('🧾 Headers (exact): $exactHeaders');
+      }
+      final uri = Uri.parse('$currentBaseUrl$endpoint');
+      final response = await http
+          .post(uri, headers: exactHeaders, body: json.encode(data))
+          .timeout(timeout);
+      return handleResponse(response);
+    } catch (e) {
+      return handleError(e);
+    }
+  }
+
   static Future<Map<String, dynamic>> _httpRequest(
     String method,
     String endpoint, {
@@ -256,8 +331,12 @@ class ApiServer {
         print('🚀 $method Request: $currentBaseUrl$endpoint');
         if (data != null) print('📦 Data: $data');
         print('🔑 Has Auth: $hasAuthToken | Bearer ${tokenPreview()}');
-        final authHeader = hasAuthToken ? 'Bearer ${tokenPreview()}' : '<none>';
-        print('🧾 Authorization header: $authHeader');
+        final authHeaderPrev = hasAuthToken
+            ? 'Bearer ${tokenPreview()}'
+            : '<none>';
+        print(
+          '🧾 Authorization header: $authHeaderPrev',
+        ); // ✅ ไม่ log token เต็ม
       }
 
       http.Response response;
@@ -346,7 +425,7 @@ class ApiServer {
           .where((f) => f.existsSync())
           .toList();
 
-      // ✅ จำกัดสูงสุด 5 รูป (กัน user เลือกเกิน)
+      // ✅ จำกัดสูงสุด 5 รูป
       final toUpload = safeFiles.take(5).toList();
       if (kDebugMode) {
         print('🖼️ Files (path) count: ${toUpload.length}');
@@ -392,7 +471,7 @@ class ApiServer {
         print('🖼️ Multipart (bytes) upload → $endpoint');
       }
 
-      // ใส่ header พื้นฐาน (อย่ากำหนด Content-Type เอง ให้ http จัดการ boundary)
+      // ใส่ header พื้นฐาน
       final headers = Map<String, String>.from(defaultHeaders);
       req.headers.addAll(headers);
 
@@ -401,7 +480,7 @@ class ApiServer {
         req.fields.addAll(fields);
       }
 
-      // ✅ จำกัดสูงสุด 5 รูป (กัน user ใส่เกิน)
+      // ✅ จำกัดสูงสุด 5 รูป
       final limited = files.take(5).toList();
       if (kDebugMode) {
         print('🖼️ Files (bytes) count: ${limited.length}');
@@ -597,5 +676,76 @@ class ApiServer {
     } catch (e) {
       return handleError(e);
     }
+  }
+
+  // =================== AUTH SHORTCUTS =======================
+  /// Login → คืน response; ถ้าสำเร็จ จะไม่เซ็ต token ให้อัตโนมัติ
+  /// (ให้ชั้น service ตัดสินใจว่าจะเก็บ token หรือไม่)
+  static Future<Map<String, dynamic>> authLogin({
+    required String username,
+    required String password,
+  }) {
+    return post('/api/auth/login', {
+      'username': username,
+      'password': password,
+    });
+  }
+
+  /// Register → รองรับ user_email
+  static Future<Map<String, dynamic>> authRegister({
+    required String username,
+    required String userTel,
+    required String userEmail,
+    required String password,
+    required String confirmPassword,
+    required String name,
+  }) {
+    return post('/api/auth/register', {
+      'username': username,
+      'user_tel': userTel,
+      'user_email': userEmail,
+      'password': password,
+      'confirm_password': confirmPassword,
+      'name': name,
+    });
+  }
+
+  // ============== PASSWORD RESET (EMAIL OTP) ===============
+  /// 1) ขอ OTP ไปที่อีเมล
+  static Future<Map<String, dynamic>> requestPasswordReset(String email) {
+    // ใช้ timeout สั้นลงเล็กน้อยก็ได้ แต่คง default จาก _httpRequest ไว้ที่ 60s
+    return post('/api/auth/request-password-reset', {
+      'identifier': email.trim().toLowerCase(),
+    });
+  }
+
+  /// 2) ยืนยัน OTP → ได้ temp_token
+  static Future<Map<String, dynamic>> verifyPasswordReset({
+    required String email,
+    required String otp,
+  }) {
+    return post('/api/auth/verify-reset', {
+      'identifier': email.trim().toLowerCase(),
+      'otp': otp.trim(),
+    });
+  }
+
+  /// 3) รีเซ็ตรหัสผ่าน (ใช้ temp_token เท่านั้น ไม่ใช้ JWT ปกติ)
+  static Future<Map<String, dynamic>> resetPassword({
+    required String tempToken,
+    required String newPassword,
+  }) {
+    if (kDebugMode) {
+      final prev = tempToken.length > 15
+          ? '${tempToken.substring(0, 15)}...'
+          : tempToken;
+      print('🔐 Reset password with tempToken: $prev');
+    }
+    return postWithExactHeaders(
+      '/api/auth/reset-password',
+      {'new_password': newPassword},
+      exactHeaders: jsonHeadersExact(tempToken),
+      // หากอยากให้สั้นลง: timeout: const Duration(seconds: 20),
+    );
   }
 }

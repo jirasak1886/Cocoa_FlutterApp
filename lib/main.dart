@@ -1,5 +1,6 @@
 import 'package:cocoa_app/api/auth_api.dart';
 import 'package:cocoa_app/screens/area.dart';
+import 'package:cocoa_app/screens/forgot_password_screen.dart';
 import 'package:cocoa_app/screens/inspection_history_page.dart';
 import 'package:cocoa_app/screens/inspection_page.dart';
 import 'package:cocoa_app/screens/login_screen.dart';
@@ -38,6 +39,7 @@ class CocoaApp extends StatelessWidget {
         '/profile/edit': (context) => const ProfileEditPage(),
         '/inspection': (context) => const InspectionPage(),
         '/history': (context) => const InspectionHistoryPage(),
+        '/forgot-password': (context) => ForgotPasswordScreen(),
       },
       debugShowCheckedModeBanner: false,
     );

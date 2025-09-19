@@ -2,8 +2,10 @@ import 'package:cocoa_app/api/auth_api.dart';
 import 'package:flutter/material.dart';
 
 class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
   @override
-  _DashboardScreenState createState() => _DashboardScreenState();
+  State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
@@ -15,70 +17,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _checkAuthentication();
+    // ✅ เรียกหลังเฟรมแรก เพื่อลดโอกาส race กับการ set token หลัง login
+    WidgetsBinding.instance.addPostFrameCallback((_) => _guardAuth());
   }
 
-  Future<void> _checkAuthentication() async {
+  /// ตรวจสิทธิ์ด้วย retry 1 ครั้งกัน race และอย่าล้าง token เองเมื่อ 401 ที่ไม่ชัดเจน
+  Future<void> _guardAuth() async {
     try {
-      print('🔍 Dashboard: Checking authentication...');
+      debugPrint('🔍 Dashboard: Checking authentication (attempt 1)...');
+      var authResult = await AuthApiService.checkAuth();
+      debugPrint('🔍 Dashboard auth result #1: $authResult');
 
-      final authResult = await AuthApiService.checkAuth();
+      var authed = authResult['authenticated'] == true;
 
-      print('🔍 Dashboard auth result: $authResult');
+      if (!authed) {
+        // กัน race: รอสั้นๆ แล้วลองใหม่
+        await Future.delayed(const Duration(milliseconds: 200));
+        debugPrint('🔁 Dashboard: Retrying authentication (attempt 2)...');
+        authResult = await AuthApiService.checkAuth();
+        debugPrint('🔍 Dashboard auth result #2: $authResult');
+        authed = authResult['authenticated'] == true;
+      }
 
-      if (mounted) {
-        setState(() {
-          _isAuthenticated = authResult['authenticated'] ?? false;
-          _userData = authResult['user'];
-          _isLoading = false;
-
-          if (!_isAuthenticated) {
-            _errorMessage = authResult['message'] ?? 'ไม่มีสิทธิ์เข้าถึง';
-          }
-        });
-
-        if (!_isAuthenticated) {
-          print('❌ Dashboard: Not authenticated, redirecting to login...');
-          _redirectToLogin();
-        } else {
-          print('✅ Dashboard: Authentication successful');
+      if (!mounted) return;
+      setState(() {
+        _isAuthenticated = authed;
+        _userData = authResult['user'];
+        _isLoading = false;
+        if (!authed) {
+          _errorMessage = authResult['message'] ?? 'ไม่มีสิทธิ์เข้าถึง';
         }
+      });
+
+      if (!authed) {
+        debugPrint('❌ Dashboard: Not authenticated → navigating to /login');
+        _goLogin();
+      } else {
+        debugPrint('✅ Dashboard: Authentication successful');
       }
     } catch (e) {
-      print('❌ Dashboard auth error: $e');
-
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _isAuthenticated = false;
-          _errorMessage = 'เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์';
-        });
-        _redirectToLogin();
-      }
+      debugPrint('❌ Dashboard auth error: $e');
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _isAuthenticated = false;
+        _errorMessage = 'เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์';
+      });
+      _goLogin();
     }
   }
 
-  void _redirectToLogin() {
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/login');
-      }
-    });
+  void _goLogin() {
+    // นำทางทันทีแบบไม่หน่วง (ประสบการณ์ลื่นกว่า)
+    if (!mounted) return;
+    Navigator.of(
+      context,
+    ).pushReplacementNamed('/login', arguments: {'reason': 'auth_failed'});
   }
 
   Future<void> _handleLogout() async {
     try {
       await AuthApiService.logout();
-
-      if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/login');
-      }
-    } catch (e) {
-      print('Logout error: $e');
-      if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/login');
-      }
-    }
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.of(context).pushReplacementNamed('/login');
   }
 
   // ฟังก์ชันสำหรับตรวจสอบว่าเป็นหน้าจอขนาดใหญ่หรือไม่
@@ -104,7 +106,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final isLargeScreen = _isLargeScreen(context);
-    final screenWidth = MediaQuery.of(context).size.width;
 
     // Loading screen
     if (_isLoading) {
@@ -129,7 +130,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    // Authentication failed screen
+    // Authentication failed screen (จะเห็นแค่แว้บเดียวก่อน navigate ใน _goLogin)
     if (!_isAuthenticated) {
       return Scaffold(
         backgroundColor: Colors.grey[50],
@@ -193,7 +194,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         foregroundColor: Colors.white,
         elevation: 0,
         centerTitle: !isLargeScreen, // Center title บนมือถือ
-        // ปุ่มย้อนกลับ
         leading: Navigator.canPop(context)
             ? IconButton(
                 icon: const Icon(Icons.arrow_back_ios_new_rounded),
@@ -201,9 +201,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 tooltip: 'ย้อนกลับ',
               )
             : null,
-
         actions: [
-          // สำหรับหน้าจอใหญ่ - แสดงข้อความ logout
           if (isLargeScreen)
             TextButton.icon(
               onPressed: _handleLogout,
@@ -213,17 +211,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 style: TextStyle(color: Colors.white),
               ),
             )
-          // สำหรับมือถือ - ใช้ popup menu
           else
             PopupMenuButton<String>(
               onSelected: (value) {
-                if (value == 'logout') {
-                  _handleLogout();
-                }
+                if (value == 'logout') _handleLogout();
               },
               tooltip: 'เมนู',
-              itemBuilder: (context) => [
-                const PopupMenuItem(
+              itemBuilder: (context) => const [
+                PopupMenuItem(
                   value: 'logout',
                   child: Row(
                     children: [
@@ -240,41 +235,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          // สำหรับหน้าจอใหญ่ - จำกัดความกว้างสูงสุด
+          final isLarge = _isLargeScreen(context);
           return Center(
             child: Container(
               constraints: BoxConstraints(
-                maxWidth: isLargeScreen ? 1200 : double.infinity,
+                maxWidth: isLarge ? 1200 : double.infinity,
               ),
               child: SingleChildScrollView(
-                padding: EdgeInsets.all(isLargeScreen ? 32 : 20),
+                padding: EdgeInsets.all(isLarge ? 32 : 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Welcome Card
-                    _buildWelcomeCard(isLargeScreen),
-
-                    SizedBox(height: isLargeScreen ? 32 : 24),
-
-                    // Menu Section
+                    _buildWelcomeCard(isLarge),
+                    SizedBox(height: isLarge ? 32 : 24),
                     Text(
                       'เมนูหลัก',
                       style: TextStyle(
-                        fontSize: isLargeScreen ? 22 : 18,
+                        fontSize: isLarge ? 22 : 18,
                         fontWeight: FontWeight.bold,
                         color: Colors.grey[800],
                       ),
                     ),
-                    SizedBox(height: isLargeScreen ? 20 : 16),
-
-                    // Menu Grid
-                    _buildMenuGrid(context, isLargeScreen),
-
-                    SizedBox(height: isLargeScreen ? 32 : 24),
-
-                    // Debug Info (เฉพาะ Debug mode)
-                    // if (true) // เปลี่ยนเป็น kDebugMode ในโปรดักชัน
-                    //   _buildDebugCard(isLargeScreen),
+                    SizedBox(height: isLarge ? 20 : 16),
+                    _buildMenuGrid(context, isLarge),
+                    SizedBox(height: isLarge ? 32 : 24),
+                    // ถ้าต้องการ debug card ให้เปิดใช้ได้
+                    // if (kDebugMode) _buildDebugCard(isLarge),
                   ],
                 ),
               ),
@@ -386,47 +372,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         _buildMenuCard(
           'จัดการแปลง',
-          Icons
-              .yard, // เปลี่ยนจาก Icons.landscape เป็น Icons.yard (สำหรับแปลงปลูก)
+          Icons.yard,
           Colors.green,
           isLargeScreen,
-          () {
-            Navigator.of(context).pushNamed('/field');
-            print('Navigate to fields management');
-          },
+          () => Navigator.of(context).pushNamed('/field'),
         ),
         _buildMenuCard(
           'ตรวจสอบพืช',
-          Icons
-              .biotech, // เปลี่ยนจาก Icons.search เป็น Icons.biotech (สำหรับการตรวจสอบทางวิทยาศาสตร์)
+          Icons.biotech,
           Colors.orange,
           isLargeScreen,
-          () {
-            Navigator.of(context).pushNamed('/inspection');
-            print('Navigate to plant inspection');
-          },
+          () => Navigator.of(context).pushNamed('/inspection'),
         ),
         _buildMenuCard(
           'ประวัติการตรวจสอบ',
-          Icons
-              .history, // เปลี่ยนจาก Icons.analytics เป็น Icons.history (สำหรับประวัติ)
+          Icons.history,
           Colors.purple,
           isLargeScreen,
-          () {
-            Navigator.of(context).pushNamed('/history');
-            print('Navigate to reports');
-          },
+          () => Navigator.of(context).pushNamed('/history'),
         ),
         _buildMenuCard(
           'โปรไฟล์',
-          Icons
-              .person, // เปลี่ยนจาก Icons.settings เป็น Icons.person (สำหรับโปรไฟล์)
+          Icons.person,
           Colors.blue,
           isLargeScreen,
-          () {
-            Navigator.of(context).pushNamed('/profile');
-            print('Navigate to settings');
-          },
+          () => Navigator.of(context).pushNamed('/profile'),
         ),
       ],
     );

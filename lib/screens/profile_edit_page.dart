@@ -17,6 +17,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
   late TextEditingController _nameCtrl;
   late TextEditingController _telCtrl;
   late TextEditingController _usernameCtrl;
+  late TextEditingController _emailCtrl;
 
   final _curPwdCtrl = TextEditingController();
   final _newPwdCtrl = TextEditingController();
@@ -26,7 +27,10 @@ class _ProfileEditPageState extends State<ProfileEditPage>
   bool _changingPwd = false;
   bool _showCur = false, _showNew = false, _showConfirm = false;
 
+  bool _isLoading = true; // ✅ โหลด/ตรวจสิทธิ์
+  String _errorMessage = '';
   Map<String, dynamic>? _initialUser;
+
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
 
@@ -36,6 +40,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
     _nameCtrl = TextEditingController();
     _telCtrl = TextEditingController();
     _usernameCtrl = TextEditingController();
+    _emailCtrl = TextEditingController();
 
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 300),
@@ -44,21 +49,72 @@ class _ProfileEditPageState extends State<ProfileEditPage>
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
-    _animationController.forward();
+
+    // ✅ ตรวจสิทธิ์ + โหลดข้อมูลหลังเฟรมแรก กัน race
+    WidgetsBinding.instance.addPostFrameCallback((_) => _guardAndLoad());
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_initialUser == null) {
+  Future<void> _guardAndLoad() async {
+    try {
+      // 1) รับ args ถ้ามี
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map<String, dynamic>) {
         _initialUser = args;
-        _nameCtrl.text = args['name']?.toString() ?? '';
-        _telCtrl.text = args['user_tel']?.toString() ?? '';
-        _usernameCtrl.text = args['username']?.toString() ?? '';
       }
+
+      // 2) checkAuth รอบแรก
+      var r = await AuthApiService.checkAuth();
+      var authed = r['authenticated'] == true;
+
+      if (!authed) {
+        // กัน race: รอสั้นๆ แล้วลองใหม่
+        await Future.delayed(const Duration(milliseconds: 200));
+        r = await AuthApiService.checkAuth();
+        authed = r['authenticated'] == true;
+      }
+
+      if (!mounted) return;
+      if (!authed) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = r['message'] ?? 'ไม่มีสิทธิ์เข้าถึง';
+        });
+        // นำทางกลับ login
+        Navigator.of(
+          context,
+        ).pushReplacementNamed('/login', arguments: {'reason': 'auth_failed'});
+        return;
+      }
+
+      // 3) ถ้าไม่มี args ให้ใช้ user จาก checkAuth
+      _initialUser ??= r['user'] as Map<String, dynamic>?;
+
+      // 4) preload ฟิลด์จาก _initialUser
+      _applyUserToFields(_initialUser);
+
+      setState(() {
+        _isLoading = false;
+      });
+      _animationController.forward();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'เกิดข้อผิดพลาดในการตรวจสอบสิทธิ์';
+      });
+      Navigator.of(context).pushReplacementNamed('/login');
     }
+  }
+
+  void _applyUserToFields(Map<String, dynamic>? u) {
+    if (u == null) return;
+    _nameCtrl.text = (u['name'] ?? '').toString();
+    _telCtrl.text = (u['user_tel'] ?? u['tel'] ?? '').toString();
+    _usernameCtrl.text = (u['username'] ?? '').toString();
+    _emailCtrl.text = (u['user_email'] ?? u['email'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
   }
 
   @override
@@ -66,6 +122,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
     _nameCtrl.dispose();
     _telCtrl.dispose();
     _usernameCtrl.dispose();
+    _emailCtrl.dispose();
     _curPwdCtrl.dispose();
     _newPwdCtrl.dispose();
     _confirmPwdCtrl.dispose();
@@ -74,20 +131,16 @@ class _ProfileEditPageState extends State<ProfileEditPage>
   }
 
   // ฟังก์ชันตรวจสอบขนาดหน้าจอ
-  bool _isLargeScreen(BuildContext context) {
-    return MediaQuery.of(context).size.width >= 768;
-  }
+  bool _isLargeScreen(BuildContext context) =>
+      MediaQuery.of(context).size.width >= 768;
 
   Future<void> _save() async {
     if (_saving) return;
 
-    // ปิดคีย์บอร์ด / เคลียร์โฟกัส เพื่อให้ validator ทำงานครบ
     FocusScope.of(context).unfocus();
 
-    // validate ส่วนข้อมูลโปรไฟล์
     if (!_formKey.currentState!.validate()) return;
 
-    // ถ้าจะเปลี่ยนรหัส ให้ validate ฟอร์มรหัสผ่านด้วย
     if (_changingPwd) {
       if (!_pwdFormKey.currentState!.validate()) return;
       if (_newPwdCtrl.text.trim() != _confirmPwdCtrl.text.trim()) {
@@ -103,11 +156,21 @@ class _ProfileEditPageState extends State<ProfileEditPage>
     setState(() => _saving = true);
 
     try {
-      // 1) Update โปรไฟล์ (ชื่อ/เบอร์/username)
+      // ✅ เช็คสิทธิ์อีกรอบแบบเบาๆ (กัน token หลุดกลางจังหวะ)
+      final auth = await AuthApiService.checkAuth();
+      if (auth['authenticated'] != true) {
+        _showSnack('หมดสิทธิ์การใช้งาน กรุณาเข้าสู่ระบบใหม่', isError: true);
+        if (!mounted) return;
+        Navigator.of(context).pushReplacementNamed('/login');
+        return;
+      }
+
+      // 1) Update โปรไฟล์
       final upd = await AuthApiService.updateProfile(
         name: _nameCtrl.text.trim(),
         userTel: _telCtrl.text.trim(),
         username: _usernameCtrl.text.trim(),
+        userEmail: _emailCtrl.text.trim().toLowerCase(),
       );
 
       if (upd['success'] != true) {
@@ -119,7 +182,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
         return;
       }
 
-      // 2) ถ้า user เลือกเปลี่ยนรหัส ให้ยิงอีกคำสั่ง
+      // 2) เปลี่ยนรหัสผ่าน (ถ้าผู้ใช้เลือก)
       if (_changingPwd) {
         final ch = await AuthApiService.changePassword(
           currentPassword: _curPwdCtrl.text.trim(),
@@ -136,17 +199,13 @@ class _ProfileEditPageState extends State<ProfileEditPage>
           return;
         }
 
-        // ถ้าเปลี่ยนรหัสผ่านสำเร็จ → บังคับออกจากระบบ แล้วไปหน้า Login
         _showSnack('เปลี่ยนรหัสผ่านสำเร็จ กำลังออกจากระบบ...');
         await AuthApiService.logout();
         if (!mounted) return;
-        Navigator.of(
-          context,
-        ).pushNamedAndRemoveUntil('/login', (route) => false);
-        return; // จบที่นี่ ไม่ต้อง pop กลับ
+        Navigator.of(context).pushNamedAndRemoveUntil('/login', (r) => false);
+        return;
       }
 
-      // อัปเดตเฉพาะโปรไฟล์ (ไม่เปลี่ยนรหัสผ่าน)
       _showSnack('บันทึกข้อมูลสำเร็จ');
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -171,38 +230,70 @@ class _ProfileEditPageState extends State<ProfileEditPage>
   @override
   Widget build(BuildContext context) {
     final isLargeScreen = _isLargeScreen(context);
-    final u = _initialUser;
+
+    if (_isLoading) {
+      return Scaffold(
+        backgroundColor: Colors.grey[50],
+        appBar: _buildAppBar(isLargeScreen),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(color: Colors.green),
+              const SizedBox(height: 16),
+              Text(
+                'กำลังเตรียมข้อมูล...',
+                style: TextStyle(color: Colors.grey[600]),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_initialUser == null) {
+      return Scaffold(
+        backgroundColor: Colors.grey[50],
+        appBar: _buildAppBar(isLargeScreen),
+        body: _buildErrorScreen(
+          isLargeScreen,
+          message: _errorMessage.isEmpty ? 'ไม่พบข้อมูลผู้ใช้' : _errorMessage,
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: Colors.grey[50],
-      appBar: AppBar(
-        title: Text(
-          'แก้ไขโปรไฟล์',
-          style: TextStyle(
-            fontSize: isLargeScreen ? 20 : 18,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        backgroundColor: Colors.green,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        centerTitle: !isLargeScreen,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded),
-          onPressed: () => Navigator.of(context).maybePop(),
-          tooltip: 'ย้อนกลับ',
-        ),
+      appBar: _buildAppBar(isLargeScreen),
+      body: FadeTransition(
+        opacity: _fadeAnimation,
+        child: _buildEditForm(context, _initialUser!, isLargeScreen),
       ),
-      body: u == null
-          ? _buildErrorScreen(isLargeScreen)
-          : FadeTransition(
-              opacity: _fadeAnimation,
-              child: _buildEditForm(context, u, isLargeScreen),
-            ),
     );
   }
 
-  Widget _buildErrorScreen(bool isLargeScreen) {
+  PreferredSizeWidget _buildAppBar(bool isLargeScreen) {
+    return AppBar(
+      title: Text(
+        'แก้ไขโปรไฟล์',
+        style: TextStyle(
+          fontSize: isLargeScreen ? 20 : 18,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      backgroundColor: Colors.green,
+      foregroundColor: Colors.white,
+      elevation: 0,
+      centerTitle: !isLargeScreen,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+        onPressed: () => Navigator.of(context).maybePop(),
+        tooltip: 'ย้อนกลับ',
+      ),
+    );
+  }
+
+  Widget _buildErrorScreen(bool isLargeScreen, {required String message}) {
     return Center(
       child: Container(
         constraints: const BoxConstraints(maxWidth: 400),
@@ -217,12 +308,13 @@ class _ProfileEditPageState extends State<ProfileEditPage>
             ),
             const SizedBox(height: 20),
             Text(
-              'ไม่พบข้อมูลผู้ใช้',
+              message,
               style: TextStyle(
                 fontSize: isLargeScreen ? 20 : 18,
                 fontWeight: FontWeight.w600,
                 color: Colors.grey[700],
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 10),
             Text(
@@ -231,6 +323,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
                 fontSize: isLargeScreen ? 16 : 14,
                 color: Colors.grey[500],
               ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -253,22 +346,12 @@ class _ProfileEditPageState extends State<ProfileEditPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header Card
               _buildHeaderCard(u, isLargeScreen),
-
               SizedBox(height: isLargeScreen ? 32 : 24),
-
-              // Profile Info Form
               _buildProfileInfoCard(isLargeScreen),
-
               SizedBox(height: isLargeScreen ? 24 : 20),
-
-              // Password Change Section
               _buildPasswordChangeCard(isLargeScreen),
-
               SizedBox(height: isLargeScreen ? 40 : 32),
-
-              // Save Button
               _buildSaveButton(isLargeScreen),
             ],
           ),
@@ -404,9 +487,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
                 final t = (v ?? '').trim();
                 if (t.isEmpty) return 'กรุณากรอกเบอร์โทร';
                 final digits = t.replaceAll(RegExp(r'\D'), '');
-                if (digits.length < 10) {
-                  return 'เบอร์โทรไม่ถูกต้อง';
-                }
+                if (digits.length < 10) return 'เบอร์โทรไม่ถูกต้อง';
                 return null;
               },
               isLargeScreen: isLargeScreen,
@@ -419,6 +500,22 @@ class _ProfileEditPageState extends State<ProfileEditPage>
               icon: Icons.alternate_email,
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'กรุณากรอก Username' : null,
+              isLargeScreen: isLargeScreen,
+            ),
+            SizedBox(height: isLargeScreen ? 20 : 16),
+
+            _buildTextField(
+              controller: _emailCtrl,
+              label: 'อีเมล',
+              icon: Icons.email_outlined,
+              keyboardType: TextInputType.emailAddress,
+              validator: (v) {
+                final t = (v ?? '').trim();
+                if (t.isEmpty) return 'กรุณากรอกอีเมล';
+                final emailRegex = RegExp(r'^[^@]+@[^@]+\.[^@]+');
+                if (!emailRegex.hasMatch(t)) return 'อีเมลไม่ถูกต้อง';
+                return null;
+              },
               isLargeScreen: isLargeScreen,
             ),
           ],
@@ -473,7 +570,7 @@ class _ProfileEditPageState extends State<ProfileEditPage>
           ),
           SizedBox(height: isLargeScreen ? 20 : 16),
 
-          // Switch Toggle
+          // Toggle
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -558,8 +655,9 @@ class _ProfileEditPageState extends State<ProfileEditPage>
                           validator: (v) {
                             final t = v?.trim() ?? '';
                             if (t.isEmpty) return 'กรุณากรอกรหัสผ่านใหม่';
-                            if (t.length < 6)
+                            if (t.length < 6) {
                               return 'รหัสผ่านใหม่ต้องยาวอย่างน้อย 6 ตัวอักษร';
+                            }
                             return null;
                           },
                           isLargeScreen: isLargeScreen,
