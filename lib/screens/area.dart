@@ -466,7 +466,7 @@ class _FieldActionButton extends StatelessWidget {
   }
 }
 
-// ===== Zone Tile =====
+// ===== Zone Tile (no lat/lng shown) =====
 class _ZoneTile extends StatefulWidget {
   final Map<String, dynamic> zone;
   final String fieldName;
@@ -489,43 +489,6 @@ class _ZoneTile extends StatefulWidget {
 }
 
 class _ZoneTileState extends State<_ZoneTile> {
-  bool _loading = true;
-  String? _latLngText;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadMarksAndBuildLatLng();
-  }
-
-  Future<void> _loadMarksAndBuildLatLng() async {
-    try {
-      final res = await FieldApiService.getMarks(widget.zone['zone_id']);
-      if (res['success'] == true) {
-        final marks = List<Map<String, dynamic>>.from(res['data'] ?? []);
-        if (marks.isNotEmpty) {
-          double lat = 0, lng = 0;
-          for (final m in marks) {
-            lat += (m['latitude'] as num).toDouble();
-            lng += (m['longitude'] as num).toDouble();
-          }
-          lat /= marks.length;
-          lng /= marks.length;
-          _latLngText =
-              '(${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)})';
-        } else {
-          _latLngText = 'ไม่มีพิกัด';
-        }
-      } else {
-        _latLngText = 'ไม่มีพิกัด';
-      }
-    } catch (_) {
-      _latLngText = 'ไม่มีพิกัด';
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final zone = widget.zone;
@@ -561,14 +524,7 @@ class _ZoneTileState extends State<_ZoneTile> {
               spacing: 8,
               children: [
                 _InfoChip(icon: Icons.park, label: '${zone['num_trees']} ต้น'),
-                if (_loading)
-                  const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else if (_latLngText != null)
-                  _InfoChip(icon: Icons.gps_fixed, label: _latLngText!),
+                // (ซ่อนพิกัด: ไม่แสดงชิปพิกัด/สปินเนอร์ใดๆ)
               ],
             ),
           ),
@@ -863,7 +819,7 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
   }
 }
 
-// ===== Field Coordinates Dialog (UPDATED: เพิ่มพิมพ์พิกัดเอง + แก้/ลบ) =====
+// ===== Field Coordinates Dialog (UPDATED: เพิ่มยืนยันล้างทั้งหมด) =====
 class _FieldCoordinatesDialog extends StatefulWidget {
   final Map<String, dynamic> field;
   final VoidCallback onSaved;
@@ -891,6 +847,43 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
     super.initState();
     _loadExistingVertices();
   }
+
+  // ---------- ยืนยันลบ/ล้างทั้งหมด ----------
+  Future<bool> _confirmDeleteAll({
+    required String title,
+    required String message,
+    String confirmText = 'ลบทั้งหมด',
+    String cancelText = 'ยกเลิก',
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(cancelText),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _confirmAndClearPoints() async {
+    final ok = await _confirmDeleteAll(
+      title: 'ล้างจุดในโหมดนี้?',
+      message: 'ต้องการลบพิกัดของแปลงนี้ทั้งหมดหรือไม่ (ไม่สามารถย้อนกลับได้)',
+    );
+    if (ok) _clearPoints();
+  }
+  // -----------------------------------------------------------
 
   Future<void> _loadExistingVertices() async {
     final field = FieldApiService.safeFieldData(widget.field);
@@ -1237,7 +1230,9 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
                   OutlinedButton.icon(
                     icon: const Icon(Icons.clear_all),
                     label: const Text('ล้างทั้งหมด'),
-                    onPressed: _isLoading ? null : _clearPoints,
+                    onPressed: _isLoading
+                        ? null
+                        : _confirmAndClearPoints, // ✅ ยืนยันก่อน
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
                     ),
@@ -1628,7 +1623,7 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
   }
 }
 
-// ===== Zone Coordinates Dialog (UPDATED: พิมพ์เอง + tree_no = หมายเลขต้น) =====
+// ===== Zone Coordinates Dialog (UPDATED: เพิ่มยืนยันล้างทั้งหมด) =====
 class _ZoneCoordinatesDialog extends StatefulWidget {
   final Map<String, dynamic> zone;
   final String fieldName;
@@ -1658,6 +1653,43 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
     super.initState();
     _loadExistingMarks();
   }
+
+  // ---------- ยืนยันลบ/ล้างทั้งหมด ----------
+  Future<bool> _confirmDeleteAll({
+    required String title,
+    required String message,
+    String confirmText = 'ลบทั้งหมด',
+    String cancelText = 'ยกเลิก',
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(cancelText),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _confirmAndClearMarks() async {
+    final ok = await _confirmDeleteAll(
+      title: 'ล้างทั้งหมด?',
+      message: 'ต้องการลบตำแหน่งต้น (tree_no) ทั้งหมดในโซนนี้หรือไม่',
+    );
+    if (ok) _clearMarks();
+  }
+  // -----------------------------------------------------------
 
   Future<void> _loadExistingMarks() async {
     try {
@@ -2005,7 +2037,9 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                 const SizedBox(width: 12),
                 if (_marks.isNotEmpty)
                   TextButton.icon(
-                    onPressed: _isLoading ? null : _clearMarks,
+                    onPressed: _isLoading
+                        ? null
+                        : _confirmAndClearMarks, // ✅ ยืนยันก่อน
                     icon: const Icon(Icons.clear_all),
                     label: const Text('ล้างทั้งหมด'),
                     style: TextButton.styleFrom(foregroundColor: Colors.red),
@@ -2095,7 +2129,6 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                             '${(mark['latitude'] as double).toStringAsFixed(5)}, ${(mark['longitude'] as double).toStringAsFixed(5)}',
                             style: const TextStyle(fontSize: 13),
                           ),
-
                           trailing: Wrap(
                             children: [
                               IconButton(

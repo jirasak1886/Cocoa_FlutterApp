@@ -78,6 +78,59 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
     }
   }
 
+  // ---------- ยืนยันลบ/ล้างทั้งหมด (ฟังก์ชันใช้ซ้ำ) ----------
+  Future<bool> _confirmDeleteAll({
+    required String title,
+    required String message,
+    String confirmText = 'ลบทั้งหมด',
+    String cancelText = 'ยกเลิก',
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(cancelText),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _confirmAndClearCurrentMode() async {
+    // ไม่มีอะไรให้ล้างก็ไม่ถาม
+    if (_mode == MapEditMode.field && _fieldVertices.isEmpty) return;
+    if (_mode == MapEditMode.zone && _activeZonePoints.isEmpty) return;
+
+    final ok = await _confirmDeleteAll(
+      title: _mode == MapEditMode.field
+          ? 'ล้างจุดในโหมดแปลง?'
+          : 'ล้างจุดในโหมดโซน?',
+      message:
+          'ต้องการลบจุดทั้งหมดในโหมดนี้หรือไม่ (การลบไม่สามารถย้อนกลับได้)',
+    );
+    if (!ok) return;
+
+    setState(() {
+      if (_mode == MapEditMode.field) {
+        _fieldVertices.clear();
+      } else {
+        _activeZonePoints.clear();
+      }
+    });
+    _toast('ล้างจุดในโหมดนี้แล้ว');
+  }
+  // -----------------------------------------------------------
+
   // โหลดเส้นขอบแปลง + ขนาด
   Future<void> _loadFieldVertices() async {
     _fieldVertices.clear();
@@ -507,17 +560,10 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                 ),
                 const SizedBox(height: 8),
 
+                // ✅ ใช้ยืนยันก่อนล้าง
                 FloatingActionButton.extended(
                   heroTag: 'clear',
-                  onPressed: () {
-                    setState(() {
-                      if (_mode == MapEditMode.field) {
-                        _fieldVertices.clear();
-                      } else {
-                        _activeZonePoints.clear();
-                      }
-                    });
-                  },
+                  onPressed: _confirmAndClearCurrentMode,
                   icon: const Icon(Icons.clear_all),
                   label: const Text('ล้างจุดในโหมดนี้'),
                   backgroundColor: Colors.red,

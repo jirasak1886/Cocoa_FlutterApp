@@ -89,6 +89,45 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
     }
   }
 
+  // ========= ยืนยันก่อนล้างทั้งหมด =========
+  Future<bool> _confirmDeleteAll({
+    required String title,
+    required String message,
+    String confirmText = 'ลบทั้งหมด',
+    String cancelText = 'ยกเลิก',
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(cancelText),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  Future<void> _confirmAndClearAll() async {
+    if (_points.isEmpty) return; // ไม่มีอะไรให้ล้าง
+    final ok = await _confirmDeleteAll(
+      title: 'ล้างทั้งหมด?',
+      message:
+          'ต้องการลบพิกัดในโซนนี้ทั้งหมดหรือไม่ (การลบไม่สามารถย้อนกลับได้)',
+    );
+    if (ok) setState(() => _points.clear());
+  }
+  // ======================================
+
   LatLng _centroid(List<LatLng> pts) {
     if (pts.isEmpty) return const LatLng(13.736, 100.523);
     double lat = 0, lng = 0;
@@ -382,11 +421,10 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
                   backgroundColor: _points.isEmpty ? Colors.grey : null,
                 ),
                 const SizedBox(height: 8),
+                // ✅ ปุ่มล้างทั้งหมดแบบมียืนยัน
                 FloatingActionButton.extended(
                   heroTag: 'clear',
-                  onPressed: _points.isEmpty
-                      ? null
-                      : () => setState(() => _points.clear()),
+                  onPressed: _points.isEmpty ? null : _confirmAndClearAll,
                   label: const Text('ล้างทั้งหมด'),
                   icon: const Icon(Icons.clear_all),
                   backgroundColor: _points.isEmpty ? Colors.grey : Colors.red,
