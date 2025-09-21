@@ -24,16 +24,13 @@ class _FieldManagementState extends State<FieldManagement> {
 
   Future<void> _loadFields() async {
     setState(() => isLoading = true);
-
     final result = await FieldApiService.getFieldsWithZones();
-
     setState(() {
       isLoading = false;
       if (result['success']) {
         fields = List<Map<String, dynamic>>.from(result['data'] ?? []);
       }
     });
-
     if (!result['success']) {
       _showMessage(result['message'] ?? 'โหลดข้อมูลไม่สำเร็จ', isError: true);
     }
@@ -302,8 +299,7 @@ class _FieldManagementState extends State<FieldManagement> {
                                 return _ZoneTile(
                                   zone: safeZone,
                                   fieldName: field['field_name'],
-                                  fieldId:
-                                      field['field_id'], // ✅ ส่ง fieldId ให้ด้วย
+                                  fieldId: field['field_id'],
                                   onEdit: () => _showZoneForm(
                                     field['field_id'],
                                     field['field_name'],
@@ -409,7 +405,6 @@ class _FieldActionButton extends StatelessWidget {
             ],
           ),
         ),
-        // NEW: เมนูดูแผนที่แปลง → ไปหน้าเดียว /map-editor
         PopupMenuItem(
           value: 'map',
           child: Row(
@@ -451,7 +446,6 @@ class _FieldActionButton extends StatelessWidget {
             onCoordinates();
             break;
           case 'map':
-            // ✅ ไปหน้าเดียว /map-editor ส่ง field_id/field_name
             Navigator.of(context, rootNavigator: true).pushNamed(
               '/map-editor',
               arguments: {
@@ -476,7 +470,7 @@ class _FieldActionButton extends StatelessWidget {
 class _ZoneTile extends StatefulWidget {
   final Map<String, dynamic> zone;
   final String fieldName;
-  final int fieldId; // ✅ เพิ่ม fieldId เพื่อส่งให้หน้า map เดียว
+  final int fieldId;
   final VoidCallback onEdit;
   final VoidCallback onCoordinates;
   final VoidCallback onDelete;
@@ -484,7 +478,7 @@ class _ZoneTile extends StatefulWidget {
   const _ZoneTile({
     required this.zone,
     required this.fieldName,
-    required this.fieldId, // ✅ รับค่า
+    required this.fieldId,
     required this.onEdit,
     required this.onCoordinates,
     required this.onDelete,
@@ -608,7 +602,6 @@ class _ZoneTileState extends State<_ZoneTile> {
                   ],
                 ),
               ),
-              // NEW: เมนูดูแผนที่โซน → ไปหน้าเดียว /map-editor
               PopupMenuItem(
                 value: 'map',
                 child: Row(
@@ -640,13 +633,11 @@ class _ZoneTileState extends State<_ZoneTile> {
                   widget.onCoordinates();
                   break;
                 case 'map':
-                  // ✅ ไปหน้าเดียว /map-editor ส่ง field_id/field_name
                   Navigator.of(context, rootNavigator: true).pushNamed(
                     '/map-editor',
                     arguments: {
                       'field_id': widget.fieldId,
                       'field_name': widget.fieldName,
-                      // ไม่จำเป็นต้องส่ง zone_id; หน้า map ใหม่จะโหลดทุกโซนของแปลงเอง
                     },
                   );
                   break;
@@ -708,17 +699,17 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
     Map<String, dynamic> result;
     try {
       if (widget.field != null) {
+        // ✅ ไม่ส่ง vertices เลย (กันการลบพิกัด)
         result = await FieldApiService.updateField(
           fieldId: widget.field!['field_id'],
           fieldName: _nameController.text.trim(),
           sizeSquareMeter: _sizeController.text.trim(),
-          vertices: [], // ไม่อัปเดตพิกัด
         );
       } else {
+        // ✅ ไม่ส่ง vertices ถ้ายังไม่มี
         result = await FieldApiService.createField(
           fieldName: _nameController.text.trim(),
           sizeSquareMeter: _sizeController.text.trim(),
-          vertices: [], // ไม่มีพิกัดตอนสร้าง
         );
       }
     } catch (e) {
@@ -872,7 +863,7 @@ class _FieldFormDialogState extends State<_FieldFormDialog> {
   }
 }
 
-// ===== Field Coordinates Dialog =====
+// ===== Field Coordinates Dialog (UPDATED: เพิ่มพิมพ์พิกัดเอง + แก้/ลบ) =====
 class _FieldCoordinatesDialog extends StatefulWidget {
   final Map<String, dynamic> field;
   final VoidCallback onSaved;
@@ -889,7 +880,11 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
   final _lngController = TextEditingController();
   bool _isLoading = false;
   bool _gettingLoc = false;
-  final List<Map<String, double>> _gpsPoints = [];
+
+  final List<Map<String, double>> _points = [];
+
+  final _manLatCtl = TextEditingController();
+  final _manLngCtl = TextEditingController();
 
   @override
   void initState() {
@@ -903,40 +898,34 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
     if (res['success'] == true && res['data'] != null) {
       final data = Map<String, dynamic>.from(res['data']);
       final vertices = List<Map<String, dynamic>>.from(data['vertices'] ?? []);
-      if (vertices.isNotEmpty) {
-        _gpsPoints.clear();
-        for (final v in vertices) {
-          final lat = (v['latitude'] as num?)?.toDouble();
-          final lng = (v['longitude'] as num?)?.toDouble();
-          if (lat != null && lng != null) {
-            _gpsPoints.add({'lat': lat, 'lng': lng});
-          }
+      _points.clear();
+      for (final v in vertices) {
+        final lat = (v['latitude'] as num?)?.toDouble();
+        final lng = (v['longitude'] as num?)?.toDouble();
+        if (lat != null && lng != null) {
+          _points.add({'lat': lat, 'lng': lng});
         }
-        _updateCentroid();
-        if (mounted) setState(() {});
       }
+      _updateCentroid();
+      if (mounted) setState(() {});
     }
   }
 
   void _updateCentroid() {
-    if (_gpsPoints.isEmpty) {
+    if (_points.isEmpty) {
       _latController.text = '';
       _lngController.text = '';
       return;
     }
-    final c = _centroid(_gpsPoints);
-    _latController.text = c['lat']!.toStringAsFixed(7);
-    _lngController.text = c['lng']!.toStringAsFixed(7);
-  }
-
-  Map<String, double> _centroid(List<Map<String, double>> pts) {
-    if (pts.isEmpty) return {'lat': 0, 'lng': 0};
     double lat = 0, lng = 0;
-    for (final p in pts) {
+    for (final p in _points) {
       lat += p['lat']!;
       lng += p['lng']!;
     }
-    return {'lat': lat / pts.length, 'lng': lng / pts.length};
+    lat /= _points.length;
+    lng /= _points.length;
+    _latController.text = lat.toStringAsFixed(7);
+    _lngController.text = lng.toStringAsFixed(7);
   }
 
   Future<bool> _ensureLocationReady() async {
@@ -989,10 +978,10 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
         desiredAccuracy: LocationAccuracy.best,
       );
       setState(() {
-        _gpsPoints.add({'lat': p.latitude, 'lng': p.longitude});
+        _points.add({'lat': p.latitude, 'lng': p.longitude});
         _updateCentroid();
       });
-      _toast('เพิ่มจุดที่ ${_gpsPoints.length} สำเร็จ');
+      _toast('เพิ่มจุดที่ ${_points.length} สำเร็จ');
     } catch (e) {
       _toast('อ่านตำแหน่งไม่สำเร็จ: $e', error: true);
     } finally {
@@ -1000,16 +989,89 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
     }
   }
 
+  void _addPointManual() {
+    final lat = double.tryParse(_manLatCtl.text.trim());
+    final lng = double.tryParse(_manLngCtl.text.trim());
+    if (lat == null || lng == null) {
+      _toast('กรุณากรอกละติจูด/ลองจิจูดให้ถูกต้อง', error: true);
+      return;
+    }
+    setState(() {
+      _points.add({'lat': lat, 'lng': lng});
+      _manLatCtl.clear();
+      _manLngCtl.clear();
+      _updateCentroid();
+    });
+    _toast('เพิ่มพิกัดแล้ว');
+  }
+
+  void _editPoint(int index) {
+    final item = _points[index];
+    final latCtl = TextEditingController(text: item['lat']!.toStringAsFixed(7));
+    final lngCtl = TextEditingController(text: item['lng']!.toStringAsFixed(7));
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('แก้ไขพิกัดของแปลง'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: latCtl,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+              decoration: const InputDecoration(labelText: 'ละติจูด'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: lngCtl,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+              decoration: const InputDecoration(labelText: 'ลองจิจูด'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ยกเลิก'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newLat = double.tryParse(latCtl.text.trim());
+              final newLng = double.tryParse(lngCtl.text.trim());
+              if (newLat == null || newLng == null) {
+                _toast('ข้อมูลไม่ถูกต้อง', error: true);
+                return;
+              }
+              setState(() {
+                _points[index] = {'lat': newLat, 'lng': newLng};
+                _updateCentroid();
+              });
+              Navigator.pop(context);
+              _toast('บันทึกการแก้ไขแล้ว');
+            },
+            child: const Text('บันทึก'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _removePoint(int index) {
     setState(() {
-      _gpsPoints.removeAt(index);
+      _points.removeAt(index);
       _updateCentroid();
     });
   }
 
   void _clearPoints() {
     setState(() {
-      _gpsPoints.clear();
+      _points.clear();
       _updateCentroid();
     });
   }
@@ -1028,7 +1090,7 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
   Future<void> _save() async {
     setState(() => _isLoading = true);
 
-    final vertices = _gpsPoints
+    final vertices = _points
         .map((p) => {'latitude': p['lat'], 'longitude': p['lng']})
         .toList();
 
@@ -1039,7 +1101,7 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
         fieldId: field['field_id'],
         fieldName: field['field_name'],
         sizeSquareMeter: field['size_square_meter'].toString(),
-        vertices: vertices,
+        vertices: vertices, // ตั้งใจแทนที่พิกัดทั้งชุด
       );
     } catch (e) {
       result = {'success': false, 'message': 'เกิดข้อผิดพลาด: $e'};
@@ -1068,7 +1130,7 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
-        width: isTablet ? 500 : double.infinity,
+        width: isTablet ? 520 : double.infinity,
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1089,48 +1151,68 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
                 ),
               ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
-            // ศูนย์กลาง (คำนวณอัตโนมัติ)
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _latController,
-                    readOnly: true,
-                    decoration: InputDecoration(
-                      labelText: 'ละติจูด (ศูนย์กลาง)',
-                      prefixIcon: const Icon(Icons.gps_fixed),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+            // ฟอร์มเพิ่มพิกัดเอง
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('เพิ่มพิกัดขอบเขตแปลง (พิมพ์เอง)'),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _manLatCtl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                            signed: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'ละติจูด',
+                            prefixIcon: Icon(Icons.explore),
+                          ),
+                        ),
                       ),
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _manLngCtl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                            signed: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'ลองจิจูด',
+                            prefixIcon: Icon(Icons.explore_outlined),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.icon(
+                      onPressed: _isLoading ? null : _addPointManual,
+                      icon: const Icon(Icons.add_location_alt),
+                      label: const Text('เพิ่มพิกัด'),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _lngController,
-                    readOnly: true,
-                    decoration: InputDecoration(
-                      labelText: 'ลองจิจูด (ศูนย์กลาง)',
-                      prefixIcon: const Icon(Icons.gps_fixed),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 12),
 
-            // ปุ่มควบคุม
+            // ปุ่มเพิ่มจาก GPS + สถานะ
             Row(
               children: [
                 Expanded(
@@ -1148,81 +1230,75 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
                     onPressed: _isLoading || _gettingLoc
                         ? null
                         : _addPointFromGPS,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
-                if (_gpsPoints.isNotEmpty)
+                if (_points.isNotEmpty)
                   OutlinedButton.icon(
                     icon: const Icon(Icons.clear_all),
                     label: const Text('ล้างทั้งหมด'),
                     onPressed: _isLoading ? null : _clearPoints,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Colors.red,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
               ],
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
-            // สถานะจุด
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: _gpsPoints.isEmpty
-                    ? Colors.grey.shade100
-                    : Colors.green.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: _gpsPoints.isEmpty
-                      ? Colors.grey.shade300
-                      : Colors.green.shade300,
-                ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _gpsPoints.isEmpty
-                        ? Icons.location_disabled
-                        : Icons.location_on,
-                    color: _gpsPoints.isEmpty
-                        ? Colors.grey.shade600
-                        : Colors.green.shade700,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    'จำนวนจุดพิกัด: ${_gpsPoints.length} จุด',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w500,
-                      color: _gpsPoints.isEmpty
-                          ? Colors.grey.shade700
-                          : Colors.green.shade700,
+            // ศูนย์กลางโดยประมาณ (อ่านอย่างเดียว)
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _latController,
+                    readOnly: true,
+                    decoration: InputDecoration(
+                      labelText: 'ละติจูด (ศูนย์กลางโดยประมาณ)',
+                      prefixIcon: const Icon(Icons.gps_fixed),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade100,
                     ),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _lngController,
+                    readOnly: true,
+                    decoration: InputDecoration(
+                      labelText: 'ลองจิจูด (ศูนย์กลางโดยประมาณ)',
+                      prefixIcon: const Icon(Icons.gps_fixed),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade100,
+                    ),
+                  ),
+                ),
+              ],
             ),
 
-            // รายการจุด
-            if (_gpsPoints.isNotEmpty) ...[
-              const SizedBox(height: 16),
+            const SizedBox(height: 12),
+
+            if (_points.isNotEmpty) ...[
               ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 200),
+                constraints: const BoxConstraints(maxHeight: 260),
                 child: Container(
-                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     border: Border.all(color: Colors.grey.shade300),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: ListView.builder(
                     shrinkWrap: true,
-                    itemCount: _gpsPoints.length,
+                    itemCount: _points.length,
                     itemBuilder: (context, index) {
-                      final point = _gpsPoints[index];
+                      final p = _points[index];
                       return ListTile(
                         dense: true,
                         leading: CircleAvatar(
@@ -1238,26 +1314,37 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
                           ),
                         ),
                         title: Text(
-                          '${point['lat']!.toStringAsFixed(5)}, ${point['lng']!.toStringAsFixed(5)}',
+                          '${p['lat']!.toStringAsFixed(5)}, ${p['lng']!.toStringAsFixed(5)}',
                           style: const TextStyle(fontSize: 13),
                         ),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: _isLoading
-                              ? null
-                              : () => _removePoint(index),
-                          color: Colors.red.shade600,
+                        trailing: Wrap(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit, size: 18),
+                              color: Colors.blue.shade600,
+                              tooltip: 'แก้ไขพิกัดนี้',
+                              onPressed: _isLoading
+                                  ? null
+                                  : () => _editPoint(index),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 18),
+                              color: Colors.red.shade600,
+                              tooltip: 'ลบตำแหน่งนี้',
+                              onPressed: _isLoading
+                                  ? null
+                                  : () => _removePoint(index),
+                            ),
+                          ],
                         ),
                       );
                     },
                   ),
                 ),
               ),
+              const SizedBox(height: 8),
             ],
 
-            const SizedBox(height: 24),
-
-            // ปุ่มบันทึก
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -1268,13 +1355,7 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
                 const SizedBox(width: 12),
                 FilledButton(
                   onPressed: _isLoading ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 12,
-                    ),
-                  ),
+                  style: FilledButton.styleFrom(backgroundColor: Colors.green),
                   child: _isLoading
                       ? const SizedBox(
                           width: 16,
@@ -1547,7 +1628,7 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
   }
 }
 
-// ===== Zone Coordinates Dialog =====
+// ===== Zone Coordinates Dialog (UPDATED: พิมพ์เอง + tree_no = หมายเลขต้น) =====
 class _ZoneCoordinatesDialog extends StatefulWidget {
   final Map<String, dynamic> zone;
   final String fieldName;
@@ -1568,17 +1649,14 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
   final List<Map<String, dynamic>> _marks = [];
   bool _marksLoaded = false;
 
-  // ขอบเขตแปลง (option สำหรับอนาคต)
-  double? _centerLat, _centerLng, _radiusMeters;
-  bool _enforceBoundary = false;
-  static const double _boundarySlack = 1.15;
-  static const double _minRadiusMeters = 50.0;
+  final _treeNoCtl = TextEditingController();
+  final _latCtl = TextEditingController();
+  final _lngCtl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _loadExistingMarks();
-    _loadFieldBoundary();
   }
 
   Future<void> _loadExistingMarks() async {
@@ -1605,11 +1683,6 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
       _marksLoaded = true;
       if (mounted) setState(() {});
     }
-  }
-
-  Future<void> _loadFieldBoundary() async {
-    // ถ้าต้องใช้ขอบเขตแปลงจริง ๆ ให้เรียก API field details โดยส่ง field_id มาด้วย
-    if (mounted) setState(() {});
   }
 
   Future<bool> _ensureLocationReady() async {
@@ -1657,6 +1730,18 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
     return true;
   }
 
+  int _nextTreeNo() {
+    if (_marks.isEmpty) return 1;
+    final maxNo = _marks
+        .map((e) => (e['tree_no'] as int))
+        .fold<int>(0, (prev, el) => el > prev ? el : prev);
+    return maxNo + 1;
+  }
+
+  bool _existsTreeNo(int treeNo) {
+    return _marks.any((m) => (m['tree_no'] as int) == treeNo);
+  }
+
   Future<void> _addMarkFromGPS() async {
     if (!await _ensureLocationReady()) return;
 
@@ -1666,27 +1751,134 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
         desiredAccuracy: LocationAccuracy.best,
       );
 
+      int treeNo = int.tryParse(_treeNoCtl.text.trim()) ?? _nextTreeNo();
+      if (_existsTreeNo(treeNo)) {
+        while (_existsTreeNo(treeNo)) treeNo++;
+      }
+
       setState(() {
         _marks.add({
-          'tree_no': _marks.length + 1,
+          'tree_no': treeNo,
           'latitude': pos.latitude,
           'longitude': pos.longitude,
         });
         _isLoading = false;
       });
-      _toast('เพิ่มตำแหน่งแล้ว ${_marks.length} ต้น');
+      _toast('เพิ่มตำแหน่งแล้ว (tree_no $treeNo)');
     } catch (e) {
       setState(() => _isLoading = false);
       _toast('อ่านตำแหน่งไม่สำเร็จ: $e', error: true);
     }
   }
 
+  void _addMarkManual() {
+    final lat = double.tryParse(_latCtl.text.trim());
+    final lng = double.tryParse(_lngCtl.text.trim());
+    if (lat == null || lng == null) {
+      _toast('กรุณากรอกละติจูด/ลองจิจูดให้ถูกต้อง', error: true);
+      return;
+    }
+    int treeNo = int.tryParse(_treeNoCtl.text.trim()) ?? _nextTreeNo();
+    if (_existsTreeNo(treeNo)) {
+      _toast('tree_no นี้ถูกใช้แล้ว กรุณาเลือกหมายเลขอื่น', error: true);
+      return;
+    }
+    setState(() {
+      _marks.add({'tree_no': treeNo, 'latitude': lat, 'longitude': lng});
+      _treeNoCtl.clear();
+      _latCtl.clear();
+      _lngCtl.clear();
+    });
+    _toast('เพิ่มตำแหน่งแล้ว (tree_no $treeNo)');
+  }
+
+  void _editMark(int index) {
+    final m = _marks[index];
+    final treeNoCtl = TextEditingController(
+      text: (m['tree_no'] as int).toString(),
+    );
+    final latCtl = TextEditingController(
+      text: (m['latitude'] as double).toStringAsFixed(7),
+    );
+    final lngCtl = TextEditingController(
+      text: (m['longitude'] as double).toStringAsFixed(7),
+    );
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('แก้ไขตำแหน่งต้นโกโก้'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: treeNoCtl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'tree_no (หมายเลขต้น)',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: latCtl,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+              decoration: const InputDecoration(labelText: 'ละติจูด'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: lngCtl,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+                signed: true,
+              ),
+              decoration: const InputDecoration(labelText: 'ลองจิจูด'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ยกเลิก'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final newTreeNo = int.tryParse(treeNoCtl.text.trim());
+              final newLat = double.tryParse(latCtl.text.trim());
+              final newLng = double.tryParse(lngCtl.text.trim());
+              if (newTreeNo == null || newLat == null || newLng == null) {
+                _toast('ข้อมูลไม่ถูกต้อง', error: true);
+                return;
+              }
+              final dup = _marks.any(
+                (e) => e != m && (e['tree_no'] as int) == newTreeNo,
+              );
+              if (dup) {
+                _toast('tree_no นี้ถูกใช้แล้ว', error: true);
+                return;
+              }
+              setState(() {
+                _marks[index] = {
+                  'tree_no': newTreeNo,
+                  'latitude': newLat,
+                  'longitude': newLng,
+                };
+              });
+              Navigator.pop(context);
+              _toast('บันทึกการแก้ไขแล้ว');
+            },
+            child: const Text('บันทึก'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _removeMark(int index) {
     setState(() {
       _marks.removeAt(index);
-      for (var i = 0; i < _marks.length; i++) {
-        _marks[i]['tree_no'] = i + 1;
-      }
     });
   }
 
@@ -1737,7 +1929,7 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
-        width: isTablet ? 500 : double.infinity,
+        width: isTablet ? 520 : double.infinity,
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1786,32 +1978,43 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
               ),
             ),
 
-            const SizedBox(height: 20),
-
-            // ปุ่มเพิ่มพิกัด
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                icon: _isLoading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.my_location),
-                label: Text(
-                  _isLoading ? 'กำลังอ่านตำแหน่ง...' : 'เพิ่มตำแหน่งจาก GPS',
+            const SizedBox(height: 16),
+            // ปุ่มเพิ่มจาก GPS + สถานะ
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: _isLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.my_location),
+                    label: Text(
+                      _isLoading
+                          ? 'กำลังอ่านตำแหน่ง...'
+                          : 'เพิ่มตำแหน่งจาก GPS',
+                    ),
+                    onPressed: _isLoading ? null : _addMarkFromGPS,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
                 ),
-                onPressed: _isLoading ? null : _addMarkFromGPS,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                ),
-              ),
+                const SizedBox(width: 12),
+                if (_marks.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: _isLoading ? null : _clearMarks,
+                    icon: const Icon(Icons.clear_all),
+                    label: const Text('ล้างทั้งหมด'),
+                    style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  ),
+              ],
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
-            // สถานะ
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -1838,7 +2041,7 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'ตำแหน่งจาก GPS: ${_marks.length} ต้น',
+                      'ตำแหน่งที่บันทึกไว้: ${_marks.length} จุด (หมายเหตุ: tree_no = หมายเลขต้น ไม่ใช่จำนวนจุด)',
                       style: TextStyle(
                         fontWeight: FontWeight.w500,
                         color: _marks.isEmpty
@@ -1847,24 +2050,17 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                       ),
                     ),
                   ),
-                  if (_marks.isNotEmpty)
-                    TextButton(
-                      onPressed: _isLoading ? null : _clearMarks,
-                      style: TextButton.styleFrom(foregroundColor: Colors.red),
-                      child: const Text('ล้างทั้งหมด'),
-                    ),
                 ],
               ),
             ),
 
-            // รายการพิกัด
             if (_marks.isNotEmpty) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               if (!_marksLoaded)
                 const LinearProgressIndicator(minHeight: 2)
               else
                 ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 250),
+                  constraints: const BoxConstraints(maxHeight: 260),
                   child: Container(
                     decoration: BoxDecoration(
                       border: Border.all(color: Colors.grey.shade300),
@@ -1878,18 +2074,18 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                         return ListTile(
                           dense: true,
                           leading: Container(
-                            width: 32,
-                            height: 32,
+                            width: 36,
+                            height: 36,
                             decoration: BoxDecoration(
                               color: Colors.orange.shade100,
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(18),
                             ),
                             child: Center(
                               child: Text(
-                                '${index + 1}',
+                                '${mark['tree_no']}',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w700,
                                   color: Colors.orange.shade700,
                                 ),
                               ),
@@ -1899,20 +2095,26 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                             '${(mark['latitude'] as double).toStringAsFixed(5)}, ${(mark['longitude'] as double).toStringAsFixed(5)}',
                             style: const TextStyle(fontSize: 13),
                           ),
-                          subtitle: Text(
-                            'ต้นที่ ${mark['tree_no']}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey.shade600,
-                            ),
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.close, size: 18),
-                            onPressed: _isLoading
-                                ? null
-                                : () => _removeMark(index),
-                            color: Colors.red.shade600,
-                            tooltip: 'ลบตำแหน่งนี้',
+
+                          trailing: Wrap(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.edit, size: 18),
+                                onPressed: _isLoading
+                                    ? null
+                                    : () => _editMark(index),
+                                color: Colors.blue.shade600,
+                                tooltip: 'แก้ไขตำแหน่งนี้',
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: _isLoading
+                                    ? null
+                                    : () => _removeMark(index),
+                                color: Colors.red.shade600,
+                                tooltip: 'ลบตำแหน่งนี้',
+                              ),
+                            ],
                           ),
                         );
                       },
@@ -1921,9 +2123,8 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
                 ),
             ],
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
-            // ปุ่มบันทึก
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [

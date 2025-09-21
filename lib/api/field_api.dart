@@ -18,10 +18,20 @@ class FieldApiService {
     return {
       'zone_id': (raw['zone_id'] as num?)?.toInt() ?? 0,
       'zone_name': (raw['zone_name'] ?? '').toString(),
+      // num_trees = จำนวนต้นโกโก้ (ฝั่ง server อัปเดตตามจำนวน marks ให้แล้ว)
       'num_trees': (raw['num_trees'] as num?)?.toInt() ?? 0,
       'field_id': (raw['field_id'] as num?)?.toInt(),
       'inspection_count': (raw['inspection_count'] as num?)?.toInt() ?? 0,
     };
+  }
+
+  // ===== Utils =====
+  static Map<String, dynamic> _stripNulls(Map<String, dynamic> m) {
+    final out = <String, dynamic>{};
+    m.forEach((k, v) {
+      if (v != null) out[k] = v;
+    });
+    return out;
   }
 
   // ===== Fields =====
@@ -53,26 +63,31 @@ class FieldApiService {
   static Future<Map<String, dynamic>> createField({
     required String fieldName,
     required String sizeSquareMeter,
-    List<Map<String, dynamic>> vertices = const [],
+    List<Map<String, dynamic>>? vertices,
   }) async {
-    return ApiServer.post('/api/fields', {
+    final body = {
       'field_name': fieldName,
       'size_square_meter': sizeSquareMeter,
-      'vertices': vertices,
-    });
+      if (vertices != null) 'vertices': vertices,
+    };
+    return ApiServer.post('/api/fields', body);
   }
 
+  /// Partial update:
+  /// - ถ้าไม่ต้องการแก้ไข size หรือ vertices ให้ส่งค่า `null`
+  /// - ถ้าส่ง `vertices` มา จะถือว่า "แทนที่ทั้งชุด"
   static Future<Map<String, dynamic>> updateField({
     required int fieldId,
-    required String fieldName,
-    required String sizeSquareMeter,
-    List<Map<String, dynamic>> vertices = const [],
+    String? fieldName,
+    String? sizeSquareMeter,
+    List<Map<String, dynamic>>? vertices,
   }) async {
-    return ApiServer.put('/api/fields/$fieldId', {
+    final body = _stripNulls({
       'field_name': fieldName,
       'size_square_meter': sizeSquareMeter,
-      'vertices': vertices,
+      if (vertices != null) 'vertices': vertices,
     });
+    return ApiServer.put('/api/fields/$fieldId', body);
   }
 
   static Future<Map<String, dynamic>> deleteField(int fieldId) async {
@@ -96,6 +111,7 @@ class FieldApiService {
     });
   }
 
+  /// สร้างโซนพร้อมปักพิกัด; server จะเซ็ต num_trees ให้เท่าจำนวน marks อัตโนมัติ
   static Future<Map<String, dynamic>> createZoneWithMarks({
     required int fieldId,
     required String zoneName,
@@ -135,7 +151,7 @@ class FieldApiService {
     return ApiServer.post('/api/zones/$zoneId/marks', {'marks': marks});
   }
 
-  /// ใช้แทนที่ marks ทั้งชุด (ต้องมี endpoint PUT ฝั่ง server แล้ว)
+  /// แทนที่ marks ทั้งชุด; server จะอัปเดต zone.num_trees = จำนวน marks ให้อัตโนมัติ
   static Future<Map<String, dynamic>> replaceMarks({
     required int zoneId,
     required List<Map<String, dynamic>> marks,

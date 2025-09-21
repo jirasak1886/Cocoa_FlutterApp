@@ -28,9 +28,16 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
   final List<LatLng> _points = <LatLng>[];
   LatLng? _center;
 
-  // ใช้ OSM แบบไม่ต้องใช้ API key
   static const String _tileUrl =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+  // ===== สีโซนจาก zoneId (คงที่) =====
+  Color _zoneStroke(int zoneId) {
+    final hue = (zoneId * 137) % 360;
+    return HSVColor.fromAHSV(1, hue.toDouble(), 0.70, 0.95).toColor();
+  }
+
+  Color _zoneFill(int zoneId) => _zoneStroke(zoneId).withOpacity(0.20);
 
   @override
   void initState() {
@@ -148,7 +155,7 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
       final marks = <Map<String, dynamic>>[];
       for (int i = 0; i < _points.length; i++) {
         marks.add({
-          'tree_no': i + 1,
+          'tree_no': i + 1, // ลำดับจุด, ไม่ใช่จำนวนต้นโกโก้
           'latitude': _points[i].latitude,
           'longitude': _points[i].longitude,
         });
@@ -185,10 +192,12 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
     final title = _zoneName.isNotEmpty
         ? 'โซน: $_zoneName (${_fieldName.isNotEmpty ? _fieldName : '-'})'
         : 'แผนที่โซน';
-
     final initial =
         _center ??
         (_points.isNotEmpty ? _points.first : const LatLng(13.736, 100.523));
+
+    final stroke = _zoneStroke(_zoneId);
+    final fill = _zoneFill(_zoneId);
 
     return Scaffold(
       appBar: AppBar(
@@ -224,26 +233,27 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
                         ),
                         children: [
                           TileLayer(
-                            urlTemplate:
-                                'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                            urlTemplate: _tileUrl,
                             maxZoom: 20,
                             userAgentPackageName: 'cocoa_app',
                             tileProvider: NetworkTileProvider(),
-                            // เลือก “แบบกันเหนียว” (ใช้ได้ทั้ง v5/v6)
                             errorTileCallback: (tile, error, stackTrace) {
-                              try {
-                                final dyn = tile as dynamic;
-                                final z = (dyn.z ?? dyn.coords?.z) ?? '?';
-                                final x = (dyn.x ?? dyn.coords?.x) ?? '?';
-                                final y = (dyn.y ?? dyn.coords?.y) ?? '?';
-                                debugPrint('Tile error z$z/x$x/y$y: $error');
-                              } catch (_) {
-                                debugPrint('Tile error: $error');
-                              }
+                              debugPrint('Tile error: $error');
                             },
                           ),
 
-                          if (_points.length >= 2)
+                          if (_points.length >= 3)
+                            PolygonLayer(
+                              polygons: [
+                                Polygon(
+                                  points: _points,
+                                  color: fill,
+                                  borderColor: stroke,
+                                  borderStrokeWidth: 3,
+                                ),
+                              ],
+                            )
+                          else if (_points.length >= 2)
                             PolylineLayer(
                               polylines: [
                                 Polyline(
@@ -251,10 +261,11 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
                                       ? [..._points, _points.first]
                                       : _points,
                                   strokeWidth: 3,
-                                  color: Colors.orange,
+                                  color: stroke,
                                 ),
                               ],
                             ),
+
                           if (_points.isNotEmpty)
                             DragMarkers(
                               markers: [
@@ -262,12 +273,11 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
                                   DragMarker(
                                     point: _points[i],
                                     size: const Size(32, 32),
-                                    builder: (ctx, pos, isDragging) =>
-                                        const Icon(
-                                          Icons.location_on,
-                                          size: 32,
-                                          color: Colors.red,
-                                        ),
+                                    builder: (ctx, pos, isDragging) => Icon(
+                                      Icons.location_on,
+                                      size: 32,
+                                      color: stroke,
+                                    ),
                                     onDragEnd: (details, newPos) {
                                       setState(() => _points[i] = newPos);
                                     },
@@ -278,7 +288,39 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
                         ],
                       ),
 
-                      // แสดงเครดิต OSM ตรงมุมขวาล่าง (เลี่ยงใช้ attributionBuilder)
+                      // เครดิต OSM + badge สี
+                      Positioned(
+                        left: 8,
+                        bottom: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 14,
+                                height: 14,
+                                decoration: BoxDecoration(
+                                  color: stroke,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _zoneName,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                       Positioned(
                         right: 8,
                         bottom: 8,
@@ -306,7 +348,6 @@ class _ZoneMapScreenState extends State<ZoneMapScreen> {
                   ),
                 ),
 
-                // แผงรายการพิกัด
                 _CoordsPanel(
                   title: 'พิกัดโซน (${_points.length})',
                   items: _points,

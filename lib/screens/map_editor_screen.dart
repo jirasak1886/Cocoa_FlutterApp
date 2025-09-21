@@ -3,10 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+
 import 'package:cocoa_app/api/field_api.dart';
 
-// ===== สำคัญ: enum ต้องอยู่นอกคลาส (ห้ามประกาศในคลาส) =====
-enum EditMode { field, zone }
+// ===== Enum วางไว้นอกคลาส =====
+enum MapEditMode { field, zone }
 
 class MapEditorScreen extends StatefulWidget {
   const MapEditorScreen({super.key});
@@ -20,23 +21,22 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
 
   int _fieldId = 0;
   String _fieldName = '';
-  double? _fieldSizeSqm; // เก็บขนาดพื้นที่ของแปลงเพื่อส่งกลับเวลา save
+  double _fieldSize = 0; // ✅ เก็บขนาดเดิมไว้ส่งตอนบันทึก
 
   bool _loading = true;
-  EditMode _mode = EditMode.field;
 
-  /// จุดเส้นรอบแปลง (สีเขียว)
+  MapEditMode _mode = MapEditMode.field;
+
   final List<LatLng> _fieldVertices = [];
 
-  /// รายชื่อโซน และโซนที่กำลังแก้ไข
   List<Map<String, dynamic>> _zones = [];
   int? _activeZoneId;
 
-  /// จุดของโซนที่กำลังแก้ไข (สีส้ม)
   final List<LatLng> _activeZonePoints = [];
 
-  /// โซนอื่น ๆ (เส้นส้มอ่อน แสดงเฉย ๆ)
-  final Map<int, List<LatLng>> _otherZones = {}; // zoneId -> points
+  final Map<int, List<LatLng>> _otherZones = {};
+
+  final Map<int, Color> _zoneColors = {};
 
   static const String _tileUrlOsm =
       'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -45,7 +45,6 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   @override
   void initState() {
     super.initState();
-    // รับ args: { field_id, field_name }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map) {
@@ -73,26 +72,24 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         _fitTo(_activeZonePoints);
       }
     } catch (_) {
-      // ignore/log
+      // ignore
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  // โหลดเส้นขอบแปลง + ขนาด
   Future<void> _loadFieldVertices() async {
     _fieldVertices.clear();
     if (_fieldId == 0) return;
     final r = await FieldApiService.getFieldDetails(_fieldId);
     if (r['success'] == true && r['data'] != null) {
       final data = Map<String, dynamic>.from(r['data']);
-
-      // เก็บ size_square_meter ไว้ส่งกลับเวลาอัปเดต (กัน 400)
-      final s = data['size_square_meter'];
-      if (s is num) {
-        _fieldSizeSqm = s.toDouble();
-      } else if (s is String) {
-        _fieldSizeSqm = double.tryParse(s);
-      }
+      _fieldName = (data['field_name'] ?? _fieldName).toString();
+      _fieldSize = (data['size_square_meter'] is num)
+          ? (data['size_square_meter'] as num).toDouble()
+          : double.tryParse(data['size_square_meter']?.toString() ?? '0') ??
+                0.0;
 
       final vertices = List<Map<String, dynamic>>.from(data['vertices'] ?? []);
       for (final v in vertices) {
@@ -106,8 +103,8 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   Future<void> _loadZonesAndMarks() async {
     _zones = [];
     _otherZones.clear();
+    _zoneColors.clear();
 
-    // ใช้ fields-with-zones เพื่อดึงโซนทั้งหมดของแปลงนี้
     final rf = await FieldApiService.getFieldsWithZones();
     if (rf['success'] == true) {
       final arr = List<Map<String, dynamic>>.from(rf['data'] ?? []);
@@ -119,9 +116,10 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       _zones = zones;
     }
 
-    // โหลดพิกัดของทุกโซน (ใช้ในชั้น "เส้นของโซนอื่น ๆ")
     for (final z in _zones) {
       final zid = (z['zone_id'] as num).toInt();
+      _zoneColors[zid] = _colorForZone(zid);
+
       final rm = await FieldApiService.getMarks(zid);
       final pts = <LatLng>[];
       if (rm['success'] == true) {
@@ -156,14 +154,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       for (final m in items) {
         final lat = (m['latitude'] as num?)?.toDouble();
         final lng = (m['longitude'] as num?)?.toDouble();
-        if (lat != null && lng != null) {
-          _activeZonePoints.add(LatLng(lat, lng));
-        }
+        if (lat != null && lng != null) _activeZonePoints.add(LatLng(lat, lng));
       }
     }
   }
 
-  // ====== camera fit ======
   void _fitTo(List<LatLng> pts) {
     if (pts.isEmpty) return;
     double minLat = pts.first.latitude, maxLat = pts.first.latitude;
@@ -174,7 +169,6 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       minLng = math.min(minLng, p.longitude);
       maxLng = math.max(maxLng, p.longitude);
     }
-    // กันกรณีจุดเดียว
     if ((maxLat - minLat).abs() < 1e-9 && (maxLng - minLng).abs() < 1e-9) {
       const d = 0.0007;
       minLat -= d;
@@ -188,45 +182,32 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
     );
   }
 
-  // ====== map tap ======
-  void _onTap(TapPosition _, LatLng p) {
-    setState(() {
-      if (_mode == EditMode.field) {
-        _fieldVertices.add(p);
-      } else {
-        if (_activeZoneId == null) return;
-        _activeZonePoints.add(p);
-      }
-    });
+  Color _colorForZone(int zoneId) {
+    final hue = (zoneId * 57) % 360;
+    final hsl = HSLColor.fromAHSL(1.0, hue.toDouble(), 0.75, 0.50);
+    return hsl.toColor();
   }
 
-  // ====== save ======
+  void _onTap(TapPosition _, LatLng p) {
+    if (_mode == MapEditMode.field) {
+      setState(() => _fieldVertices.add(p));
+    } else {
+      if (_activeZoneId == null) return;
+      setState(() => _activeZonePoints.add(p));
+    }
+  }
+
   Future<void> _saveField() async {
     if (_fieldId == 0) return;
-
-    // กัน API ที่ต้องการอย่างน้อย 3 จุด (รูปหลายเหลี่ยม)
-    if (_fieldVertices.length < 3) {
-      _toast('โปรดปักหมุดอย่างน้อย 3 จุดก่อนบันทึก', error: true);
-      return;
-    }
-
-    // ถ้าต้องการให้ polygon ปิด (จุดแรก = จุดสุดท้าย) ให้ปลดคอมเมนต์ด้านล่าง
-    // if (_fieldVertices.first != _fieldVertices.last) {
-    //   _fieldVertices.add(_fieldVertices.first);
-    // }
-
     final vertices = _fieldVertices
         .map((e) => {'latitude': e.latitude, 'longitude': e.longitude})
         .toList();
-
     final r = await FieldApiService.updateField(
       fieldId: _fieldId,
       fieldName: _fieldName,
-      // แก้บั๊ก 400: ห้ามส่งค่าว่าง ให้ส่งค่าที่อ่านได้จาก getFieldDetails
-      sizeSquareMeter: (_fieldSizeSqm ?? 0).toString(),
+      sizeSquareMeter: _fieldSize.toString(), // ✅ ส่งค่าเดิม ไม่ใช่ค่าว่าง
       vertices: vertices,
     );
-
     _toast(
       r['success'] == true
           ? 'บันทึกพิกัดแปลงสำเร็จ'
@@ -238,7 +219,6 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   Future<void> _saveZone() async {
     final zid = _activeZoneId;
     if (zid == null) return;
-
     final marks = <Map<String, dynamic>>[];
     for (int i = 0; i < _activeZonePoints.length; i++) {
       marks.add({
@@ -247,7 +227,6 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
         'longitude': _activeZonePoints[i].longitude,
       });
     }
-
     final r = await FieldApiService.replaceMarks(zoneId: zid, marks: marks);
     _toast(
       r['success'] == true
@@ -271,35 +250,40 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
   Widget build(BuildContext context) {
     final title = _fieldName.isNotEmpty ? 'แผนที่: $_fieldName' : 'แผนที่แปลง';
 
+    final activeColor = _activeZoneId != null
+        ? (_zoneColors[_activeZoneId!] ?? Colors.orange)
+        : Colors.orange;
+
+    final initialCenter = _fieldVertices.isNotEmpty
+        ? _fieldVertices.first
+        : (_activeZonePoints.isNotEmpty ? _activeZonePoints.first : _fallback);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
         backgroundColor: Colors.green,
         foregroundColor: Colors.white,
         actions: [
-          // สลับโหมด Field/Zone
           DropdownButtonHideUnderline(
-            child: DropdownButton<EditMode>(
+            child: DropdownButton<MapEditMode>(
               value: _mode,
               icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
               dropdownColor: Colors.white,
-              onChanged: (v) => setState(() => _mode = v ?? EditMode.field),
+              onChanged: (v) => setState(() => _mode = v ?? MapEditMode.field),
               items: const [
                 DropdownMenuItem(
-                  value: EditMode.field,
-                  child: Text('โหมดแปลง (สีเขียว)'),
+                  value: MapEditMode.field,
+                  child: Text('โหมดแปลง (เส้นดำ/เขียว)'),
                 ),
                 DropdownMenuItem(
-                  value: EditMode.zone,
-                  child: Text('โหมดโซน (สีส้ม)'),
+                  value: MapEditMode.zone,
+                  child: Text('โหมดโซน (ตามสีโซน)'),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-
-          // เลือกโซนเมื่ออยู่โหมด zone
-          if (_mode == EditMode.zone)
+          if (_mode == MapEditMode.zone)
             DropdownButtonHideUnderline(
               child: DropdownButton<int>(
                 value: _activeZoneId,
@@ -311,14 +295,21 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                   await _loadActiveZoneMarks();
                   if (mounted) setState(() {});
                 },
-                items: _zones
-                    .map(
-                      (z) => DropdownMenuItem<int>(
-                        value: (z['zone_id'] as num).toInt(),
-                        child: Text(z['zone_name']?.toString() ?? 'zone'),
-                      ),
-                    )
-                    .toList(),
+                items: _zones.map((z) {
+                  final zid = (z['zone_id'] as num).toInt();
+                  final name = z['zone_name']?.toString() ?? 'zone';
+                  final color = _zoneColors[zid] ?? _colorForZone(zid);
+                  return DropdownMenuItem<int>(
+                    value: zid,
+                    child: Row(
+                      children: [
+                        _colorDot(color),
+                        const SizedBox(width: 8),
+                        Text(name),
+                      ],
+                    ),
+                  );
+                }).toList(),
               ),
             ),
           const SizedBox(width: 8),
@@ -331,11 +322,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                 FlutterMap(
                   mapController: _map,
                   options: MapOptions(
-                    initialCenter: _fieldVertices.isNotEmpty
-                        ? _fieldVertices.first
-                        : (_activeZonePoints.isNotEmpty
-                              ? _activeZonePoints.first
-                              : _fallback),
+                    initialCenter: initialCenter,
                     initialZoom: 18,
                     onTap: _onTap,
                   ),
@@ -344,12 +331,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                       urlTemplate: _tileUrlOsm,
                       maxZoom: 19,
                       userAgentPackageName: 'cocoa_app',
-                      // สำคัญ: ห้ามใส่ const ตรงนี้
                       tileProvider: NetworkTileProvider(),
-                      // ถ้าต้องการ performance เว็บให้ใช้แพ็กเกจ cancellable แทน:
-                      // tileProvider: kIsWeb
-                      //     ? CancellableNetworkTileProvider()
-                      //     : NetworkTileProvider(),
                       errorTileCallback: (tile, error, stackTrace) {
                         try {
                           final dyn = tile as dynamic;
@@ -363,17 +345,27 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                       },
                     ),
 
-                    // --- เส้นแปลง (สีเขียว) ---
-                    if (_fieldVertices.length >= 2)
+                    // --- เส้นแปลง: ขอบ "สีดำ" + เส้นใน "สีเขียว" ---
+                    if (_fieldVertices.length >= 2) ...[
                       PolylineLayer(
                         polylines: [
                           Polyline(
                             points: _fieldVertices,
-                            strokeWidth: 3,
+                            strokeWidth: 5, // ขอบดำหนา
+                            color: Colors.black,
+                          ),
+                        ],
+                      ),
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: _fieldVertices,
+                            strokeWidth: 3, // เส้นเขียวทับ
                             color: Colors.green,
                           ),
                         ],
                       ),
+                    ],
                     if (_fieldVertices.isNotEmpty)
                       MarkerLayer(
                         markers: [
@@ -391,30 +383,33 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                         ],
                       ),
 
-                    // --- เส้นของ "โซนอื่น ๆ" (เส้นส้มอ่อน) ---
+                    // --- เส้นโซนอื่น ๆ (โปร่ง 50%) ---
                     if (_otherZones.isNotEmpty)
                       PolylineLayer(
                         polylines: _otherZones.entries
                             .where((e) => e.key != _activeZoneId)
                             .where((e) => e.value.length >= 2)
-                            .map(
-                              (e) => Polyline(
+                            .map((e) {
+                              final c =
+                                  (_zoneColors[e.key] ?? _colorForZone(e.key))
+                                      .withOpacity(0.5);
+                              return Polyline(
                                 points: e.value,
                                 strokeWidth: 2,
-                                color: Colors.orange.withOpacity(0.5),
-                              ),
-                            )
+                                color: c,
+                              );
+                            })
                             .toList(),
                       ),
 
-                    // --- เส้น + หมุดของ "โซนที่แก้ไขอยู่" (สีส้มชัด) ---
+                    // --- โซนที่เลือก (สีโซน) ---
                     if (_activeZonePoints.length >= 2)
                       PolylineLayer(
                         polylines: [
                           Polyline(
                             points: _activeZonePoints,
-                            strokeWidth: 3,
-                            color: Colors.orange,
+                            strokeWidth: 3.5,
+                            color: activeColor,
                           ),
                         ],
                       ),
@@ -426,9 +421,9 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                               point: p,
                               width: 34,
                               height: 34,
-                              child: const Icon(
+                              child: Icon(
                                 Icons.location_on,
-                                color: Colors.orange,
+                                color: activeColor,
                                 size: 30,
                               ),
                             ),
@@ -444,9 +439,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
+                      _legendBadge(color: Colors.black, label: 'เส้นขอบแปลง'),
+                      const SizedBox(height: 4),
                       _legendBadge(color: Colors.green, label: 'ขอบเขตแปลง'),
                       const SizedBox(height: 6),
-                      _legendBadge(color: Colors.orange, label: 'เส้นโซน'),
+                      _legendBadge(color: activeColor, label: 'โซนที่เลือก'),
                       const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -472,11 +469,10 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
           : Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Fit
                 FloatingActionButton.extended(
                   heroTag: 'fit',
                   onPressed: () {
-                    if (_mode == EditMode.field) {
+                    if (_mode == MapEditMode.field) {
                       _fitTo(_fieldVertices);
                     } else {
                       if (_activeZonePoints.isNotEmpty) {
@@ -491,12 +487,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                 ),
                 const SizedBox(height: 8),
 
-                // Undo
                 FloatingActionButton.extended(
                   heroTag: 'undo',
                   onPressed: () {
                     setState(() {
-                      if (_mode == EditMode.field) {
+                      if (_mode == MapEditMode.field) {
                         if (_fieldVertices.isNotEmpty) {
                           _fieldVertices.removeLast();
                         }
@@ -512,12 +507,11 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                 ),
                 const SizedBox(height: 8),
 
-                // Clear
                 FloatingActionButton.extended(
                   heroTag: 'clear',
                   onPressed: () {
                     setState(() {
-                      if (_mode == EditMode.field) {
+                      if (_mode == MapEditMode.field) {
                         _fieldVertices.clear();
                       } else {
                         _activeZonePoints.clear();
@@ -530,11 +524,10 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                 ),
                 const SizedBox(height: 8),
 
-                // Save
                 FloatingActionButton.extended(
                   heroTag: 'save',
                   onPressed: () async {
-                    if (_mode == EditMode.field) {
+                    if (_mode == MapEditMode.field) {
                       await _saveField();
                     } else {
                       await _saveZone();
@@ -542,7 +535,7 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
                   },
                   icon: const Icon(Icons.save),
                   label: Text(
-                    _mode == EditMode.field ? 'บันทึกแปลง' : 'บันทึกโซน',
+                    _mode == MapEditMode.field ? 'บันทึกแปลง' : 'บันทึกโซน',
                   ),
                   backgroundColor: Colors.green,
                 ),
@@ -569,4 +562,14 @@ class _MapEditorScreenState extends State<MapEditorScreen> {
       ),
     );
   }
+
+  Widget _colorDot(Color c) => Container(
+    width: 12,
+    height: 12,
+    decoration: BoxDecoration(
+      color: c,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.black12),
+    ),
+  );
 }
