@@ -1,12 +1,15 @@
 import 'package:cocoa_app/api/auth_api.dart';
 import 'package:cocoa_app/screens/area.dart';
+import 'package:cocoa_app/screens/field_map_screen.dart';
 import 'package:cocoa_app/screens/forgot_password_screen.dart';
 import 'package:cocoa_app/screens/inspection_history_page.dart';
 import 'package:cocoa_app/screens/inspection_page.dart';
 import 'package:cocoa_app/screens/login_screen.dart';
 import 'package:cocoa_app/screens/dashboard_screen.dart';
+import 'package:cocoa_app/screens/map_editor_screen.dart';
 import 'package:cocoa_app/screens/profile_edit_page.dart';
 import 'package:cocoa_app/screens/profile_page.dart';
+import 'package:cocoa_app/screens/zone_map_page.dart';
 import 'package:flutter/material.dart';
 
 void main() async {
@@ -40,6 +43,9 @@ class CocoaApp extends StatelessWidget {
         '/inspection': (context) => const InspectionPage(),
         '/history': (context) => const InspectionHistoryPage(),
         '/forgot-password': (context) => ForgotPasswordScreen(),
+        '/zone-map': (_) => const ZoneMapScreen(),
+        '/field-map': (_) => const FieldMapScreen(),
+        '/map-editor': (context) => const MapEditorScreen(),
       },
       debugShowCheckedModeBanner: false,
     );

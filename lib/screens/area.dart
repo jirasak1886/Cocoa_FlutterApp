@@ -48,12 +48,13 @@ class _FieldManagementState extends State<FieldManagement> {
   }
 
   void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: isError ? Colors.red : Colors.green,
         behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.all(16),
+        margin: const EdgeInsets.all(16),
       ),
     );
   }
@@ -301,6 +302,8 @@ class _FieldManagementState extends State<FieldManagement> {
                                 return _ZoneTile(
                                   zone: safeZone,
                                   fieldName: field['field_name'],
+                                  fieldId:
+                                      field['field_id'], // ✅ ส่ง fieldId ให้ด้วย
                                   onEdit: () => _showZoneForm(
                                     field['field_id'],
                                     field['field_name'],
@@ -406,6 +409,17 @@ class _FieldActionButton extends StatelessWidget {
             ],
           ),
         ),
+        // NEW: เมนูดูแผนที่แปลง → ไปหน้าเดียว /map-editor
+        PopupMenuItem(
+          value: 'map',
+          child: Row(
+            children: [
+              Icon(Icons.map, color: Colors.purple.shade600, size: 18),
+              const SizedBox(width: 8),
+              const Text('ดูแผนที่แปลง'),
+            ],
+          ),
+        ),
         PopupMenuItem(
           value: 'add_zone',
           child: Row(
@@ -436,6 +450,16 @@ class _FieldActionButton extends StatelessWidget {
           case 'coordinates':
             onCoordinates();
             break;
+          case 'map':
+            // ✅ ไปหน้าเดียว /map-editor ส่ง field_id/field_name
+            Navigator.of(context, rootNavigator: true).pushNamed(
+              '/map-editor',
+              arguments: {
+                'field_id': field['field_id'],
+                'field_name': field['field_name'],
+              },
+            );
+            break;
           case 'add_zone':
             onAddZone();
             break;
@@ -452,6 +476,7 @@ class _FieldActionButton extends StatelessWidget {
 class _ZoneTile extends StatefulWidget {
   final Map<String, dynamic> zone;
   final String fieldName;
+  final int fieldId; // ✅ เพิ่ม fieldId เพื่อส่งให้หน้า map เดียว
   final VoidCallback onEdit;
   final VoidCallback onCoordinates;
   final VoidCallback onDelete;
@@ -459,6 +484,7 @@ class _ZoneTile extends StatefulWidget {
   const _ZoneTile({
     required this.zone,
     required this.fieldName,
+    required this.fieldId, // ✅ รับค่า
     required this.onEdit,
     required this.onCoordinates,
     required this.onDelete,
@@ -582,6 +608,17 @@ class _ZoneTileState extends State<_ZoneTile> {
                   ],
                 ),
               ),
+              // NEW: เมนูดูแผนที่โซน → ไปหน้าเดียว /map-editor
+              PopupMenuItem(
+                value: 'map',
+                child: Row(
+                  children: [
+                    Icon(Icons.map, color: Colors.purple.shade600, size: 18),
+                    const SizedBox(width: 8),
+                    const Text('ดูแผนที่โซน'),
+                  ],
+                ),
+              ),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'delete',
@@ -601,6 +638,17 @@ class _ZoneTileState extends State<_ZoneTile> {
                   break;
                 case 'coordinates':
                   widget.onCoordinates();
+                  break;
+                case 'map':
+                  // ✅ ไปหน้าเดียว /map-editor ส่ง field_id/field_name
+                  Navigator.of(context, rootNavigator: true).pushNamed(
+                    '/map-editor',
+                    arguments: {
+                      'field_id': widget.fieldId,
+                      'field_name': widget.fieldName,
+                      // ไม่จำเป็นต้องส่ง zone_id; หน้า map ใหม่จะโหลดทุกโซนของแปลงเอง
+                    },
+                  );
                   break;
                 case 'delete':
                   widget.onDelete();
@@ -1163,7 +1211,7 @@ class _FieldCoordinatesDialogState extends State<_FieldCoordinatesDialog> {
             if (_gpsPoints.isNotEmpty) ...[
               const SizedBox(height: 16),
               ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: 200),
+                constraints: const BoxConstraints(maxHeight: 200),
                 child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -1426,8 +1474,9 @@ class _ZoneFormDialogState extends State<_ZoneFormDialog> {
                 validator: (v) {
                   if (v?.trim().isEmpty == true) return 'กรุณาใส่จำนวนต้น';
                   final num = int.tryParse(v!.trim());
-                  if (num == null || num < 0)
+                  if (num == null || num < 0) {
                     return 'ใส่จำนวนที่ถูกต้อง (>= 0)';
+                  }
                   return null;
                 },
               ),
@@ -1519,7 +1568,7 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
   final List<Map<String, dynamic>> _marks = [];
   bool _marksLoaded = false;
 
-  // ขอบเขตแปลง
+  // ขอบเขตแปลง (option สำหรับอนาคต)
   double? _centerLat, _centerLng, _radiusMeters;
   bool _enforceBoundary = false;
   static const double _boundarySlack = 1.15;
@@ -1559,9 +1608,7 @@ class _ZoneCoordinatesDialogState extends State<_ZoneCoordinatesDialog> {
   }
 
   Future<void> _loadFieldBoundary() async {
-    // หา fieldId จาก zone
-    // Note: คุณอาจต้องเพิ่ม field_id ใน zone data หรือส่งผ่าน parameter
-    // สำหรับตอนนี้ ข้ามการโหลด boundary ไปก่อน
+    // ถ้าต้องใช้ขอบเขตแปลงจริง ๆ ให้เรียก API field details โดยส่ง field_id มาด้วย
     if (mounted) setState(() {});
   }
 
