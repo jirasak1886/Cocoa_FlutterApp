@@ -466,7 +466,7 @@ class _FieldActionButton extends StatelessWidget {
   }
 }
 
-// ===== Zone Tile (no lat/lng shown) =====
+// ===== Zone Tile (now shows mark_count) =====
 class _ZoneTile extends StatefulWidget {
   final Map<String, dynamic> zone;
   final String fieldName;
@@ -523,8 +523,15 @@ class _ZoneTileState extends State<_ZoneTile> {
             child: Wrap(
               spacing: 8,
               children: [
+                // จำนวนต้น (ผู้ใช้กำหนดเอง)
                 _InfoChip(icon: Icons.park, label: '${zone['num_trees']} ต้น'),
-                // (ซ่อนพิกัด: ไม่แสดงชิปพิกัด/สปินเนอร์ใดๆ)
+
+                // จำนวนจุดพิกัด (DB/Server คำนวณให้) — แสดงเฉพาะถ้ามากกว่า 0
+                if ((zone['mark_count'] ?? 0) > 0)
+                  _InfoChip(
+                    icon: Icons.place,
+                    label: '${zone['mark_count']} จุด',
+                  ),
               ],
             ),
           ),

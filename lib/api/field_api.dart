@@ -18,10 +18,21 @@ class FieldApiService {
     return {
       'zone_id': (raw['zone_id'] as num?)?.toInt() ?? 0,
       'zone_name': (raw['zone_name'] ?? '').toString(),
-      // num_trees = จำนวนต้นโกโก้ (ฝั่ง server อัปเดตตามจำนวน marks ให้แล้ว)
-      'num_trees': (raw['num_trees'] as num?)?.toInt() ?? 0,
+      // จำนวนต้น (ให้ผู้ใช้กำหนดเอง; server ไม่เปลี่ยนตามจำนวนจุดแล้ว)
+      'num_trees':
+          (raw['num_trees'] as num?)?.toInt() ??
+          int.tryParse('${raw['num_trees'] ?? 0}') ??
+          0,
+      // จำนวนจุดพิกัดที่บันทึกไว้ (server/DB คำนวณให้)
+      'mark_count':
+          (raw['mark_count'] as num?)?.toInt() ??
+          int.tryParse('${raw['mark_count'] ?? 0}') ??
+          0,
       'field_id': (raw['field_id'] as num?)?.toInt(),
-      'inspection_count': (raw['inspection_count'] as num?)?.toInt() ?? 0,
+      'inspection_count':
+          (raw['inspection_count'] as num?)?.toInt() ??
+          int.tryParse('${raw['inspection_count'] ?? 0}') ??
+          0,
     };
   }
 
@@ -111,7 +122,7 @@ class FieldApiService {
     });
   }
 
-  /// สร้างโซนพร้อมปักพิกัด; server จะเซ็ต num_trees ให้เท่าจำนวน marks อัตโนมัติ
+  /// สร้างโซนพร้อมปักพิกัด; server จะอัปเดต **mark_count** ให้ (ไม่แตะ num_trees)
   static Future<Map<String, dynamic>> createZoneWithMarks({
     required int fieldId,
     required String zoneName,
@@ -151,7 +162,7 @@ class FieldApiService {
     return ApiServer.post('/api/zones/$zoneId/marks', {'marks': marks});
   }
 
-  /// แทนที่ marks ทั้งชุด; server จะอัปเดต zone.num_trees = จำนวน marks ให้อัตโนมัติ
+  /// แทนที่ marks ทั้งชุด; server จะอัปเดต **mark_count** ให้ (ไม่แตะ num_trees)
   static Future<Map<String, dynamic>> replaceMarks({
     required int zoneId,
     required List<Map<String, dynamic>> marks,
