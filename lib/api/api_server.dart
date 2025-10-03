@@ -1,7 +1,8 @@
 // lib/api/api_server.dart
-import 'package:cocoa_app/utils/variable.dart';
+import 'package:cocoa_app/utils/variable.dart'; // <- baseUrl & alternativeUrls
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -20,25 +21,41 @@ class UploadByteFile {
 
 class ApiServer {
   // ======================== CONFIG =========================
-  static const List<String> alternativeUrls = [
-    baseUrl, // มาจาก utils/variable.dart
-    'http://127.0.0.1:5000',
-    'http://localhost:5000',
-    'http://10.0.2.2:5000', // Android emulator
-  ];
-
-  // แสดง token แบบเต็มใน debug log หรือไม่ (ไม่แนะนำให้เปิด)
   static const bool _LOG_FULL_TOKEN_IN_DEBUG = false;
+  static const String _kPrefsBaseUrl = 'api_base_url';
 
   // ======================== STATE ==========================
   static String? _jwtToken;
-  static String? _currentBaseUrl = baseUrl; // มาจาก utils/variable.dart
+  static String? _currentBaseUrl = baseUrl; // เริ่มจากค่าใน variable.dart
+
+  // ======================== INIT ===========================
+  /// เรียกใน main() ก่อน runApp เพื่อโหลด baseUrl ที่เคยจำไว้
+  static Future<void> init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_kPrefsBaseUrl);
+      if (saved != null && saved.trim().isNotEmpty) {
+        _currentBaseUrl = saved.trim();
+      } else {
+        _currentBaseUrl = baseUrl;
+      }
+      if (kDebugMode) {
+        print('🧭 ApiServer.init → default:$baseUrl | using: $_currentBaseUrl');
+      }
+    } catch (e) {
+      if (kDebugMode) print('⚠️ ApiServer.init error: $e');
+    }
+  }
 
   // ======================== URL ============================
-  static void setBaseUrl(String url) {
-    _currentBaseUrl = url;
-    if (kDebugMode) {
-      print('🌐 Base URL set to: $_currentBaseUrl');
+  static Future<void> setBaseUrl(String url) async {
+    _currentBaseUrl = url.trim();
+    if (kDebugMode) print('🌐 Base URL set to: $_currentBaseUrl');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kPrefsBaseUrl, _currentBaseUrl!);
+    } catch (e) {
+      if (kDebugMode) print('⚠️ save baseUrl failed: $e');
     }
   }
 
@@ -46,10 +63,9 @@ class ApiServer {
 
   // ======================== TOKEN ==========================
   static void updateAuthHeaders(String token) {
-    // ✅ กัน token มี "Bearer " มาด้วย หรือมีช่องว่าง/ขึ้นบรรทัด
     var t = token.trim();
     if (t.toLowerCase().startsWith('bearer ')) {
-      t = t.substring(7).trim(); // ตัดคำว่า Bearer ออก ให้เหลือเฉพาะ JWT
+      t = t.substring(7).trim();
     }
     _jwtToken = t;
     if (kDebugMode) print('🔑 JWT Token updated');
@@ -63,7 +79,6 @@ class ApiServer {
   static bool get hasAuthToken => _jwtToken != null && _jwtToken!.isNotEmpty;
   static String? get currentToken => _jwtToken;
 
-  /// คืนค่า token แบบย่อเพื่อความปลอดภัยในการ log
   static String tokenPreview({int head = 20, int tail = 10}) {
     final t = _jwtToken;
     if (t == null || t.isEmpty) return '<null>';
@@ -76,38 +91,28 @@ class ApiServer {
     final label = _LOG_FULL_TOKEN_IN_DEBUG && kDebugMode
         ? '(full)'
         : '(preview)';
-    if (kDebugMode) {
-      print('🔐 Current JWT $label: ${tokenPreview()}');
-    }
+    if (kDebugMode) print('🔐 Current JWT $label: ${tokenPreview()}');
   }
 
   // ====================== HEADERS ==========================
-  /// เฮดเดอร์พื้นฐาน (ไม่มี Content-Type) ใช้ได้กับ GET/DELETE และ multipart
   static Map<String, String> get defaultHeaders {
     final headers = <String, String>{'Accept': 'application/json'};
     if (hasAuthToken) {
-      final t = _jwtToken!.trim(); // ✅ trim อีกรอบกันพลาด
-      headers['Authorization'] = 'Bearer $t';
+      headers['Authorization'] = 'Bearer ${_jwtToken!.trim()}';
     }
     return headers;
   }
 
-  /// เฮดเดอร์สำหรับ JSON (มี Content-Type) + แนบ JWT ปัจจุบันถ้ามี
   static Map<String, String> get jsonHeaders => {
     ...defaultHeaders,
     'Content-Type': 'application/json',
   };
 
-  /// เฮดเดอร์ JSON ที่ “เพิ่ม” ค่าเข้าไปบนฐาน defaultHeaders (ซึ่งอาจมี JWT อยู่)
-  /// ใช้กับเคสทั่วไปที่ต้องการแนบค่าเพิ่ม เช่น X-Whatever
   static Map<String, String> jsonHeadersWith({Map<String, String>? extra}) {
     return {...jsonHeaders, if (extra != null) ...extra};
   }
 
-  /// ❗เฮดเดอร์ JSON แบบ “Exact” (ไม่แตะ defaultHeaders และไม่พก JWT ปกติ)
-  /// ใช้เมื่อจำเป็นต้องส่ง Authorization แบบพิเศษ เช่น temp token ของ reset password
   static Map<String, String> jsonHeadersExact(String token) {
-    // NOTE: token ที่ส่งเข้ามาควรเป็น “ดิบ” (ไม่มีคำว่า Bearer)
     final t = token.trim().toLowerCase().startsWith('bearer ')
         ? token.trim().substring(7).trim()
         : token.trim();
@@ -136,7 +141,6 @@ class ApiServer {
       try {
         final decoded = json.decode(utf8.decode(response.bodyBytes));
         if (decoded is Map<String, dynamic>) {
-          // ใส่ success ถ้า server ไม่ส่งมา
           return {
             'success': decoded.containsKey('success') ? decoded['success'] : ok,
             'status': response.statusCode,
@@ -160,7 +164,6 @@ class ApiServer {
       }
     }
 
-    // Non-JSON
     return {
       'success': ok,
       'status': response.statusCode,
@@ -233,13 +236,29 @@ class ApiServer {
 
   // ==================== DISCOVERY ===========================
   static Future<String?> findWorkingServer() async {
-    for (String url in alternativeUrls) {
+    // รวม current + alternativeUrls (จาก utils/variable.dart) และตัดซ้ำ
+    final tried = <String>{};
+    final candidates =
+        <String>[
+          if (_currentBaseUrl != null) _currentBaseUrl!,
+          ...alternativeUrls,
+        ].where((u) {
+          final keep = !tried.contains(u);
+          tried.add(u);
+          return keep;
+        }).toList();
+
+    for (final url in candidates) {
       try {
         final response = await http
             .get(Uri.parse('$url/health'))
             .timeout(const Duration(seconds: 5));
         if (response.statusCode == 200) {
           _currentBaseUrl = url;
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(_kPrefsBaseUrl, _currentBaseUrl!);
+          } catch (_) {}
           if (kDebugMode) print('✅ Found working server at: $url');
           return url;
         }
@@ -272,7 +291,6 @@ class ApiServer {
   static Future<Map<String, dynamic>> delete(String endpoint) async =>
       _httpRequest('DELETE', endpoint);
 
-  /// POST/PUT/PATCH ที่ต้องส่ง header เพิ่มเติม “บนฐาน JSON headers ปกติ (มี JWT ได้)”
   static Future<Map<String, dynamic>> postWithHeaders(
     String endpoint,
     Map<String, dynamic> data, {
@@ -282,7 +300,7 @@ class ApiServer {
       if (kDebugMode) {
         print('🚀 POST (custom headers): $currentBaseUrl$endpoint');
         print('📦 Data: $data');
-        print('🧾 Extra headers (merged over default): $headers');
+        print('🧾 Extra headers (merged): $headers');
       }
       final uri = Uri.parse('$currentBaseUrl$endpoint');
       final response = await http
@@ -298,7 +316,6 @@ class ApiServer {
     }
   }
 
-  /// ❗POST แบบใช้ “exact headers” (จะไม่แนบ JWT ปกติ)
   static Future<Map<String, dynamic>> postWithExactHeaders(
     String endpoint,
     Map<String, dynamic> data, {
@@ -331,12 +348,6 @@ class ApiServer {
         print('🚀 $method Request: $currentBaseUrl$endpoint');
         if (data != null) print('📦 Data: $data');
         print('🔑 Has Auth: $hasAuthToken | Bearer ${tokenPreview()}');
-        final authHeaderPrev = hasAuthToken
-            ? 'Bearer ${tokenPreview()}'
-            : '<none>';
-        print(
-          '🧾 Authorization header: $authHeaderPrev',
-        ); // ✅ ไม่ log token เต็ม
       }
 
       http.Response response;
@@ -352,7 +363,7 @@ class ApiServer {
           response = await http
               .post(
                 uri,
-                headers: jsonHeaders, // ใช้ jsonHeaders
+                headers: jsonHeaders,
                 body: data != null ? json.encode(data) : null,
               )
               .timeout(const Duration(seconds: 60));
@@ -385,6 +396,7 @@ class ApiServer {
       }
       return handleResponse(response);
     } catch (e) {
+      // auto-fallback หา server ตัวที่ตอบสนอง
       if (e.toString().contains('Failed to fetch') || e is SocketException) {
         if (kDebugMode) print('🔄 Trying to find alternative server...');
         final workingServer = await findWorkingServer();
@@ -401,35 +413,26 @@ class ApiServer {
     String endpoint, {
     Map<String, String>? fields,
     List<File>? files,
-    String fileFieldName = 'images', // ✅ ตั้งค่าเริ่มต้นเป็น 'images'
+    String fileFieldName = 'images',
   }) async {
     try {
       final url = Uri.parse('$currentBaseUrl$endpoint');
       final req = http.MultipartRequest('POST', url);
 
-      if (kDebugMode) {
-        print('🖼️ Multipart upload → $endpoint');
-      }
+      if (kDebugMode) print('🖼️ Multipart upload → $endpoint');
 
-      // เฮดเดอร์ฐาน + Authorization (อย่าตั้ง content-type เอง)
-      final headers = Map<String, String>.from(defaultHeaders);
-      req.headers.addAll(headers);
+      req.headers.addAll(defaultHeaders);
 
-      // ฟิลด์ธรรมดา
       if (fields != null && fields.isNotEmpty) {
         req.fields.addAll(fields);
       }
 
-      // แนบไฟล์จาก path
       final List<File> safeFiles = (files ?? <File>[])
           .where((f) => f.existsSync())
           .toList();
+      final toUpload = safeFiles.take(5).toList(); // limit 5
 
-      // ✅ จำกัดสูงสุด 5 รูป
-      final toUpload = safeFiles.take(5).toList();
-      if (kDebugMode) {
-        print('🖼️ Files (path) count: ${toUpload.length}');
-      }
+      if (kDebugMode) print('🖼️ Files (path) count: ${toUpload.length}');
 
       for (final f in toUpload) {
         req.files.add(await http.MultipartFile.fromPath(fileFieldName, f.path));
@@ -444,7 +447,6 @@ class ApiServer {
   }
 
   // ============== MULTIPART (UPLOAD BYTES) =================
-  // เดา MIME จากนามสกุลไฟล์แบบง่าย ๆ
   static String _guessMimeFromName(String filename) {
     final name = filename.toLowerCase();
     if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
@@ -454,39 +456,28 @@ class ApiServer {
     return 'application/octet-stream';
   }
 
-  /// อัปโหลดไฟล์จาก "bytes" (เช่น PlatformFile.bytes)
-  /// ใช้เมื่อคุณไม่ได้มีไฟล์บนดิสก์ให้ fromPath ได้
   static Future<Map<String, dynamic>> postMultipartBytes(
     String endpoint, {
     Map<String, String>? fields,
     required List<({List<int> bytes, String filename, String? contentType})>
     files,
-    String fileFieldName = 'images', // ✅ ตั้งค่าเริ่มต้นเป็น 'images'
+    String fileFieldName = 'images',
   }) async {
     try {
       final url = Uri.parse('$currentBaseUrl$endpoint');
       final req = http.MultipartRequest('POST', url);
 
-      if (kDebugMode) {
-        print('🖼️ Multipart (bytes) upload → $endpoint');
-      }
+      if (kDebugMode) print('🖼️ Multipart (bytes) upload → $endpoint');
 
-      // ใส่ header พื้นฐาน
-      final headers = Map<String, String>.from(defaultHeaders);
-      req.headers.addAll(headers);
+      req.headers.addAll(defaultHeaders);
 
-      // ฟิลด์ธรรมดา
       if (fields != null && fields.isNotEmpty) {
         req.fields.addAll(fields);
       }
 
-      // ✅ จำกัดสูงสุด 5 รูป
-      final limited = files.take(5).toList();
-      if (kDebugMode) {
-        print('🖼️ Files (bytes) count: ${limited.length}');
-      }
+      final limited = files.take(5).toList(); // limit 5
+      if (kDebugMode) print('🖼️ Files (bytes) count: ${limited.length}');
 
-      // แนบไฟล์จาก bytes
       for (final f in limited) {
         final mime = (f.contentType ?? _guessMimeFromName(f.filename));
         final parts = mime.split('/');
@@ -510,7 +501,7 @@ class ApiServer {
     }
   }
 
-  /// === Convenience: อัปโหลดภาพ inspection แบบ BYTES (ใช้กับ Web/bytes) ===
+  /// Convenience: BYTES
   static Future<Map<String, dynamic>> uploadInspectionImagesBytes({
     required int inspectionId,
     required List<UploadByteFile> files,
@@ -525,7 +516,6 @@ class ApiServer {
       };
     }
 
-    // แปลงเป็น record ให้เข้ากับ postMultipartBytes(...)
     final payload =
         <({List<int> bytes, String filename, String? contentType})>[];
     for (final f in files) {
@@ -544,7 +534,7 @@ class ApiServer {
     );
   }
 
-  /// === Convenience: อัปโหลดภาพ inspection แบบ FILE PATH (มือถือ/เดสก์ท็อป) ===
+  /// Convenience: FILE PATH
   static Future<Map<String, dynamic>> uploadInspectionImagesFiles({
     required int inspectionId,
     required List<File> files,
@@ -599,7 +589,8 @@ class ApiServer {
       'success': false,
       'connected': false,
       'message':
-          '🔴 ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้\n\n• URL ที่ลอง: ${alternativeUrls.join(', ')}\n',
+          '🔴 ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้\n\n• URL ที่ลอง: '
+          '${alternativeUrls.join(', ')}\n',
       'attempted_urls': alternativeUrls,
       'suggestions': _getErrorSuggestions('connection_error'),
     };
@@ -679,8 +670,6 @@ class ApiServer {
   }
 
   // =================== AUTH SHORTCUTS =======================
-  /// Login → คืน response; ถ้าสำเร็จ จะไม่เซ็ต token ให้อัตโนมัติ
-  /// (ให้ชั้น service ตัดสินใจว่าจะเก็บ token หรือไม่)
   static Future<Map<String, dynamic>> authLogin({
     required String username,
     required String password,
@@ -691,7 +680,6 @@ class ApiServer {
     });
   }
 
-  /// Register → รองรับ user_email
   static Future<Map<String, dynamic>> authRegister({
     required String username,
     required String userTel,
@@ -711,15 +699,12 @@ class ApiServer {
   }
 
   // ============== PASSWORD RESET (EMAIL OTP) ===============
-  /// 1) ขอ OTP ไปที่อีเมล
   static Future<Map<String, dynamic>> requestPasswordReset(String email) {
-    // ใช้ timeout สั้นลงเล็กน้อยก็ได้ แต่คง default จาก _httpRequest ไว้ที่ 60s
     return post('/api/auth/request-password-reset', {
       'identifier': email.trim().toLowerCase(),
     });
   }
 
-  /// 2) ยืนยัน OTP → ได้ temp_token
   static Future<Map<String, dynamic>> verifyPasswordReset({
     required String email,
     required String otp,
@@ -730,7 +715,6 @@ class ApiServer {
     });
   }
 
-  /// 3) รีเซ็ตรหัสผ่าน (ใช้ temp_token เท่านั้น ไม่ใช้ JWT ปกติ)
   static Future<Map<String, dynamic>> resetPassword({
     required String tempToken,
     required String newPassword,
@@ -741,11 +725,8 @@ class ApiServer {
           : tempToken;
       print('🔐 Reset password with tempToken: $prev');
     }
-    return postWithExactHeaders(
-      '/api/auth/reset-password',
-      {'new_password': newPassword},
-      exactHeaders: jsonHeadersExact(tempToken),
-      // หากอยากให้สั้นลง: timeout: const Duration(seconds: 20),
-    );
+    return postWithExactHeaders('/api/auth/reset-password', {
+      'new_password': newPassword,
+    }, exactHeaders: jsonHeadersExact(tempToken));
   }
 }

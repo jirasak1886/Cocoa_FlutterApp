@@ -9,13 +9,12 @@ import 'package:mime/mime.dart';
 import 'api_server.dart';
 
 class InspectionApi {
-  // =================== รอบตรวจ (inspection) ===================
-
   static Future<Map<String, dynamic>> startInspection({
     required int fieldId,
     required int zoneId,
     String? notes,
     bool newRound = false,
+    String method = 'manual', // 'manual' | 'drone' | 'satellite'
   }) async {
     try {
       final body = <String, dynamic>{
@@ -23,6 +22,7 @@ class InspectionApi {
         'zone_id': zoneId,
         if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
         if (newRound) 'new_round': true,
+        'method': method,
       };
       return await ApiServer.post('/api/inspections/start', body);
     } catch (e) {
@@ -34,12 +34,14 @@ class InspectionApi {
     required int fieldId,
     required int zoneId,
     String? notes,
+    String method = 'manual',
   }) {
     return startInspection(
       fieldId: fieldId,
       zoneId: zoneId,
       notes: notes,
       newRound: true,
+      method: method,
     );
   }
 
@@ -61,19 +63,21 @@ class InspectionApi {
     }
   }
 
-  // =================== วิเคราะห์รูป (model) ===================
-
   static Future<Map<String, dynamic>> runAnalyze(int inspectionId) async {
     try {
-      return await ApiServer.post('/api/inspections/$inspectionId/analyze', {});
+      final uri = Uri.parse(
+        '${ApiServer.currentBaseUrl}/api/inspections/$inspectionId/analyze',
+      );
+      final res = await http
+          .post(uri, headers: ApiServer.jsonHeaders, body: jsonEncode({}))
+          .timeout(const Duration(seconds: 90));
+      return ApiServer.handleResponse(res);
     } catch (e) {
       return ApiServer.handleError(e);
     }
   }
 
-  // =================== อัปโหลดรูปภาพ ===================
-
-  /// อัป “ครั้งเดียว” สูงสุด 5 ไฟล์ (จะเลือกระหว่าง bytes หรือ path ให้เอง)
+  // ---------- Upload ----------
   static Future<Map<String, dynamic>> uploadImagesOnce({
     required int inspectionId,
     required List<PlatformFile> images,
@@ -124,7 +128,6 @@ class InspectionApi {
     }
   }
 
-  /// อัปแบบ “แบ่งก้อนละ ≤5 ไฟล์” และหยุดเมื่อโควต้ารอบเต็ม
   static Future<Map<String, dynamic>> uploadImagesBatches({
     required int inspectionId,
     required List<PlatformFile> images,
@@ -186,7 +189,6 @@ class InspectionApi {
 
         final ok = (res['success'] == true);
         if (ok) {
-          // ✅ server ส่งกลับ { saved: List, quota_remain: int, skipped: int }
           final int savedCount = (res['saved'] is List)
               ? (res['saved'] as List).length
               : (res['accepted'] is int ? res['accepted'] as int : 0);
@@ -201,12 +203,12 @@ class InspectionApi {
               ? res['quota_remain'] as int
               : null;
           if (quotaRemain != null && quotaRemain <= 0) {
-            break; // ⛔ โควต้าเต็ม หยุดส่ง
+            break;
           }
         } else {
           totalFailed += 1;
           final err = (res['error'] ?? '').toString();
-          if (err == 'quota_full') break; // ⛔ server แจ้งโควต้าเต็ม
+          if (err == 'quota_full') break;
         }
       }
 
@@ -238,8 +240,7 @@ class InspectionApi {
     );
   }
 
-  // =================== คำแนะนำปุ๋ย (recommendations) ===================
-
+  // ---------- Recs ----------
   static Future<Map<String, dynamic>> getRecommendations({
     required int inspectionId,
   }) async {
@@ -252,14 +253,37 @@ class InspectionApi {
     }
   }
 
+  static Future<Map<String, dynamic>> backfillRecommendations({
+    required int inspectionId,
+  }) async {
+    try {
+      return await ApiServer.post(
+        '/api/inspections/$inspectionId/recommendations/backfill',
+        {},
+      );
+    } catch (e) {
+      return ApiServer.handleError(e);
+    }
+  }
+
   static Future<Map<String, dynamic>> updateRecommendationStatus({
     required int recommendationId,
     required String status,
-    String? appliedDate, // 'YYYY-MM-DD'
+    String? appliedDate,
   }) async {
     try {
+      final allow = const {'suggested', 'applied', 'skipped'};
+      final s = status.trim().toLowerCase();
+      if (!allow.contains(s)) {
+        return {
+          'success': false,
+          'error': 'bad_status',
+          'message': 'status ต้องเป็น suggested|applied|skipped',
+        };
+      }
+
       final body = <String, dynamic>{
-        'status': status,
+        'status': s,
         if (appliedDate != null) 'applied_date': appliedDate,
       };
       return await ApiServer.patch(
@@ -271,10 +295,9 @@ class InspectionApi {
     }
   }
 
-  // =================== ประวัติ/สถิติ ===================
-
+  // ---------- History ----------
   static Future<Map<String, dynamic>> getHistory({
-    String group = 'month', // 'month' | 'year'
+    String group = 'month',
     String? from,
     String? to,
     int? fieldId,

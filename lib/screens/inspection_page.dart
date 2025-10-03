@@ -35,15 +35,12 @@ class _InspectionPageState extends State<InspectionPage> {
   List<PlatformFile> _picked = [];
   Map<String, dynamic>? _detail;
 
-  // คำแนะนำปุ๋ยของรอบนี้
   bool _recsLoading = false;
   List<Map<String, dynamic>> _recs = [];
 
-  // ✅ ผลตรวจจับรายรูปจาก /analyze
   List<Map<String, dynamic>> _analyzeResults = [];
 
-  // ===== Validation constants =====
-  static const int maxFileSize = 20 * 1024 * 1024; // 20MB
+  static const int maxFileSize = 20 * 1024 * 1024;
   static const List<String> allowedTypes = [
     'jpg',
     'jpeg',
@@ -51,14 +48,10 @@ class _InspectionPageState extends State<InspectionPage> {
     'bmp',
     'webp',
   ];
-
-  /// จำกัด “ต่อรอบ” 5 รูป (แต่สร้างรอบใหม่กี่ครั้งก็ได้)
   static const int maxImagesPerRound = 5;
 
-  // === ImagePicker instance ===
   final ImagePicker _imgPicker = ImagePicker();
 
-  // ===== Helpers =====
   T? _pick<T>(Map<String, dynamic> res, String key) {
     if (res.containsKey(key)) return res[key] as T?;
     final data = res['data'];
@@ -66,13 +59,11 @@ class _InspectionPageState extends State<InspectionPage> {
     return null;
   }
 
-  // >>> เงื่อนไขกดปุ่มเพิ่มรอบ <<<
-  bool get _canAddRound {
-    return _isConnected &&
-        !_busy &&
-        _selectedFieldId != null &&
-        _selectedZoneId != null;
-  }
+  bool get _canAddRound =>
+      _isConnected &&
+      !_busy &&
+      _selectedFieldId != null &&
+      _selectedZoneId != null;
 
   void _handleAddRoundPressed() {
     if (_busy) return;
@@ -88,10 +79,8 @@ class _InspectionPageState extends State<InspectionPage> {
       _toast('กรุณาเลือกโซน', isError: true);
       return;
     }
-    // ✅ เพิ่มรอบใหม่จริง ๆ
     _startRound(newRound: true);
   }
-  // <<< END
 
   @override
   void initState() {
@@ -105,15 +94,12 @@ class _InspectionPageState extends State<InspectionPage> {
     super.dispose();
   }
 
-  // ===== URL รูปจาก image_path (relative) =====
   String _imageUrl(String rel) {
     final base = ApiServer.currentBaseUrl.replaceAll(RegExp(r'\/+$'), '');
     final relNorm = rel.startsWith('/') ? rel.substring(1) : rel;
-    // backend เก็บไว้ใต้ static/uploads/<rel>
     return '$base/static/uploads/$relNorm';
   }
 
-  // ===== ดึง preds ของรูปเดียวจาก _analyzeResults ด้วยการเทียบชื่อไฟล์ =====
   List<Map<String, dynamic>> _predsForImage(String imagePathOrRel) {
     final imgName = imagePathOrRel.split(RegExp(r'[\\/]+')).last;
     final hit = _analyzeResults.where((m) {
@@ -126,16 +112,6 @@ class _InspectionPageState extends State<InspectionPage> {
     return preds.map((e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
-  String _formatConf(dynamic v) {
-    try {
-      final d = (v is num) ? v.toDouble() : double.parse('$v');
-      return '${(d * 100).clamp(0, 100).toStringAsFixed(1)}%';
-    } catch (_) {
-      return '-';
-    }
-  }
-
-  // XFile -> PlatformFile helper
   Future<PlatformFile> _xfileToPlatformFile(XFile xf) async {
     final name = xf.name.isNotEmpty
         ? xf.name
@@ -150,20 +126,17 @@ class _InspectionPageState extends State<InspectionPage> {
     }
   }
 
-  // ถ่ายภาพ
   Future<void> _takePhoto() async {
     if (_inspectionId == null) {
       _toast('กรุณาเริ่มรอบก่อน', isError: true);
       return;
     }
-
     final remain = (maxImagesPerRound - (_uploadedCount + _picked.length))
         .clamp(0, maxImagesPerRound);
     if (remain == 0) {
       _toast('อัปโหลดได้สูงสุด $maxImagesPerRound รูปต่อรอบ', isError: true);
       return;
     }
-
     try {
       final XFile? shot = await _imgPicker.pickImage(
         source: ImageSource.camera,
@@ -173,11 +146,9 @@ class _InspectionPageState extends State<InspectionPage> {
         preferredCameraDevice: CameraDevice.rear,
       );
       if (shot == null) return;
-
       final pf = await _xfileToPlatformFile(shot);
       final ok = await _validateImages([pf]);
       if (!ok) return;
-
       setState(() => _picked.add(pf));
       _toast('เพิ่มรูปจากกล้องสำเร็จ 1 ไฟล์');
     } catch (e) {
@@ -185,13 +156,11 @@ class _InspectionPageState extends State<InspectionPage> {
     }
   }
 
-  // Enhanced connection checking with retry logic
   Future<void> _checkConnectionWithRetry({int maxRetries = 3}) async {
     for (int i = 0; i < maxRetries; i++) {
       try {
         final conn = await ApiServer.checkConnection();
         if (!mounted) return;
-
         if (conn['success'] == true) {
           setState(() {
             _isConnected = true;
@@ -226,7 +195,6 @@ class _InspectionPageState extends State<InspectionPage> {
     }
   }
 
-  // Enhanced image validation
   Future<bool> _validateImages(List<PlatformFile> files) async {
     for (final file in files) {
       final extension = file.extension?.toLowerCase();
@@ -244,7 +212,6 @@ class _InspectionPageState extends State<InspectionPage> {
         );
         return false;
       }
-
       if (kIsWeb) {
         if (file.bytes == null || file.bytes!.isEmpty) {
           _showErrorDialog(
@@ -319,7 +286,6 @@ class _InspectionPageState extends State<InspectionPage> {
       _toast('ไม่ได้เชื่อมต่อกับเซิร์ฟเวอร์');
       return;
     }
-
     setState(() => _busy = true);
     try {
       final res = await FieldApiService.getFields();
@@ -362,7 +328,6 @@ class _InspectionPageState extends State<InspectionPage> {
       _zones = [];
       _selectedZoneId = null;
     });
-
     try {
       final res = await FieldApiService.getZonesByField(fieldId);
       if (!mounted) return;
@@ -436,7 +401,7 @@ class _InspectionPageState extends State<InspectionPage> {
       _picked.clear();
       _detail = null;
       _recs = [];
-      _analyzeResults = []; // เคลียร์ผลเก่าเมื่อเริ่มรอบ
+      _analyzeResults = [];
     });
 
     try {
@@ -462,7 +427,6 @@ class _InspectionPageState extends State<InspectionPage> {
               : 'เริ่มรอบสำเร็จ (inspection_id=$id, round=$roundNo)';
         });
 
-        // ซิงก์รายละเอียด/โควตาทันที
         await _refreshDetail();
         await _loadRecs();
 
@@ -494,7 +458,6 @@ class _InspectionPageState extends State<InspectionPage> {
       _toast('กรุณาเริ่มรอบก่อน', isError: true);
       return;
     }
-
     final remain = (maxImagesPerRound - (_uploadedCount + _picked.length))
         .clamp(0, maxImagesPerRound);
     if (remain == 0) {
@@ -531,7 +494,6 @@ class _InspectionPageState extends State<InspectionPage> {
       _toast('ยังไม่เลือกรูป', isError: true);
       return;
     }
-
     if (!await _validateImages(_picked)) return;
 
     setState(() {
@@ -547,7 +509,6 @@ class _InspectionPageState extends State<InspectionPage> {
 
       if (!mounted) return;
 
-      // รองรับทั้งรูปแบบ "หลายแบตช์" และ "แบตช์เดียว"
       int accepted = 0;
       int? quotaRemain;
 
@@ -565,7 +526,6 @@ class _InspectionPageState extends State<InspectionPage> {
           }
         }
       } else {
-        // fallback: แบตช์เดียว (รูปแบบเดิมจาก server)
         List saved = [];
         if (res['saved'] is List) saved = res['saved'];
         if (res['quota_remain'] is int) quotaRemain = res['quota_remain'];
@@ -578,7 +538,6 @@ class _InspectionPageState extends State<InspectionPage> {
           _uploadedCount += accepted;
           _picked.clear();
         });
-
         await _refreshDetail();
 
         final remain = quotaRemain ?? (maxImagesPerRound - _uploadedCount);
@@ -615,7 +574,6 @@ class _InspectionPageState extends State<InspectionPage> {
 
   Future<void> _refreshDetail() async {
     if (_inspectionId == null) return;
-
     try {
       final d = await InspectionApi.getInspectionDetail(_inspectionId!);
       if (!mounted) return;
@@ -632,7 +590,7 @@ class _InspectionPageState extends State<InspectionPage> {
 
         setState(() {
           _detail = data;
-          _uploadedCount = used; // ✅ อัปเดตจำนวนที่อัปโหลดในรอบนี้
+          _uploadedCount = used;
         });
       } else {
         _toast(
@@ -641,9 +599,8 @@ class _InspectionPageState extends State<InspectionPage> {
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted)
         _toast('เกิดข้อผิดพลาดในการโหลดรายละเอียด: $e', isError: true);
-      }
     }
   }
 
@@ -658,7 +615,6 @@ class _InspectionPageState extends State<InspectionPage> {
         final d = await InspectionApi.getInspectionDetail(_inspectionId!);
         final dd = (d['data'] is Map<String, dynamic>) ? d['data'] : d;
         final serverCount = (dd['images'] as List?)?.length ?? 0;
-
         if (serverCount == 0) {
           _showErrorDialog(
             'ไม่มีรูปภาพ',
@@ -681,8 +637,6 @@ class _InspectionPageState extends State<InspectionPage> {
 
     try {
       final res = await InspectionApi.runAnalyze(_inspectionId!);
-
-      // 🔽 เก็บผลรายรูปจาก analyze เพื่อนำไปแสดง
       final List rr = (res['results'] as List?) ?? const [];
       setState(() {
         _analyzeResults = rr
@@ -730,7 +684,6 @@ class _InspectionPageState extends State<InspectionPage> {
     }
   }
 
-  // ====== คำแนะนำปุ๋ย ======
   Future<void> _loadRecs() async {
     if (_inspectionId == null) return;
 
@@ -775,9 +728,7 @@ class _InspectionPageState extends State<InspectionPage> {
         status: status,
         appliedDate: appliedDate,
       );
-
       if (!mounted) return;
-
       if (r['success'] == true) {
         _toast('อัปเดตสถานะสำเร็จ');
         await _loadRecs();
@@ -794,7 +745,6 @@ class _InspectionPageState extends State<InspectionPage> {
     }
   }
 
-  // ====== UI helpers ======
   Widget _buildStyledCard({
     required Widget child,
     EdgeInsetsGeometry? padding,
@@ -939,6 +889,166 @@ class _InspectionPageState extends State<InspectionPage> {
     );
   }
 
+  // ===== Helper: ดึงสูตรปุ๋ยจากสตริง (0-0-50, 13-13-21+Mg, MgSO4) =====
+  String? _extractFormulaClient(String? s) {
+    if (s == null || s.trim().isEmpty) return null;
+    final re = RegExp(
+      r'(\d{1,2}-\d{1,2}-\d{1,2}(?:\+\s*Mg)?)|MgSO4',
+      caseSensitive: false,
+    );
+    final m = re.firstMatch(s);
+    return m?.group(0);
+  }
+
+  // =======================
+  // RECOMMENDATION TILE (code + name_th + description)
+  // =======================
+  Widget _buildRecTile(Map r) {
+    final status = (r['status'] ?? 'suggested').toString();
+    final recId = (r['recommendation_id'] ?? r['id'] ?? 0) as int;
+
+    final nameTh = (r['fert_name_th'] ?? '').toString().trim(); // name_th
+    final descTh = (r['fert_description'] ?? '')
+        .toString()
+        .trim(); // description
+    final prodName = (r['fert_name'] ?? r['product_name'] ?? '')
+        .toString()
+        .trim();
+    final recText = (r['recommendation_text'] ?? '').toString().trim();
+    final nutTh = (r['nutrient_name_th'] ?? '').toString().trim();
+
+    // สูตรปุ๋ย: ใช้จาก backend ก่อน ถ้าไม่มีให้ดึงจากข้อความ
+    String code = (r['formulation'] ?? '').toString().trim();
+    if (code.isEmpty) {
+      code =
+          _extractFormulaClient(recText) ??
+          _extractFormulaClient(prodName) ??
+          '';
+    }
+
+    final String title = prodName.isNotEmpty
+        ? prodName
+        : (nameTh.isNotEmpty ? nameTh : 'คำแนะนำ');
+
+    IconData icon;
+    Color color;
+    switch (status) {
+      case 'applied':
+        icon = Icons.check_circle;
+        color = Colors.green;
+        break;
+      case 'skipped':
+        icon = Icons.skip_next;
+        color = Colors.orange;
+        break;
+      default:
+        icon = Icons.pending;
+        color = Colors.blueGrey;
+    }
+
+    TextStyle bold(Color c) => TextStyle(fontWeight: FontWeight.w800, color: c);
+
+    // ป้ายสูตร
+    Widget? formulaPill;
+    if (code.isNotEmpty) {
+      formulaPill = Container(
+        margin: const EdgeInsets.only(top: 6, bottom: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.teal[50],
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.teal[200]!),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.science, size: 14, color: Colors.teal),
+            SizedBox(width: 6),
+          ],
+        ),
+      );
+      // เติมตัวหนังสือไว้ด้านขวาไอคอน
+      formulaPill = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          formulaPill,
+          const SizedBox(width: 0),
+          Container(
+            margin: const EdgeInsets.only(top: 6, bottom: 4),
+            child: Text(
+              code,
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+                color: Colors.teal,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[300]!),
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: color),
+        title: Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (formulaPill != null) formulaPill,
+            if (nameTh.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(nameTh, style: bold(Colors.green[800]!)),
+              ),
+            if (nutTh.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'ธาตุที่แก้: $nutTh',
+                  style: TextStyle(color: Colors.teal[700], fontSize: 12),
+                ),
+              ),
+            if (descTh.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(descTh, style: TextStyle(color: Colors.grey[800])),
+              ),
+            if (recText.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  recText,
+                  style: TextStyle(
+                    color: Colors.grey[700],
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        trailing: PopupMenuButton<String>(
+          onSelected: (v) =>
+              _updateRecStatus(recommendationId: recId, status: v),
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'applied', child: Text('ทำแล้ว (Applied)')),
+            PopupMenuItem(value: 'skipped', child: Text('ข้าม (Skipped)')),
+            PopupMenuItem(value: 'suggested', child: Text('รอทำ (Suggested)')),
+          ],
+          icon: const Icon(Icons.more_horiz),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final findings =
@@ -963,8 +1073,6 @@ class _InspectionPageState extends State<InspectionPage> {
           ),
         ],
       ),
-
-      // >>> ปุ่มลอย "เพิ่มรอบ"
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _canAddRound ? _handleAddRoundPressed : null,
@@ -973,15 +1081,12 @@ class _InspectionPageState extends State<InspectionPage> {
         backgroundColor: _canAddRound ? Colors.green : Colors.grey,
         foregroundColor: Colors.white,
       ),
-
-      // <<< END
       body: AbsorbPointer(
         absorbing: _busy,
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // Header
               _buildStyledCard(
                 child: Column(
                   children: [
@@ -1031,7 +1136,7 @@ class _InspectionPageState extends State<InspectionPage> {
                 ),
               ),
 
-              // Field & Zone
+              // เลือกแปลง/โซน
               _buildStyledCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1083,7 +1188,7 @@ class _InspectionPageState extends State<InspectionPage> {
                 ),
               ),
 
-              // Actions
+              // ปุ่มต่าง ๆ
               _buildStyledCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1201,7 +1306,7 @@ class _InspectionPageState extends State<InspectionPage> {
                 ),
               ),
 
-              // Preview picked images (ยังไม่อัปโหลด)
+              // รูปที่ยังไม่อัปโหลด
               if (_picked.isNotEmpty)
                 _buildStyledCard(
                   child: Column(
@@ -1305,7 +1410,7 @@ class _InspectionPageState extends State<InspectionPage> {
                   ),
                 ),
 
-              // ===== ผลตรวจจับ "รายรูป" ของรอบนี้ =====
+              // แกลเลอรี่ + ผลตรวจรายรูป
               if (images.isNotEmpty)
                 _buildStyledCard(
                   child: Column(
@@ -1356,7 +1461,6 @@ class _InspectionPageState extends State<InspectionPage> {
                             final url = _imageUrl(rel);
                             final preds = _predsForImage(rel);
 
-                            // ✅ flag บอก "ใบปกติ" เมื่อมีคลาส normal/nomal/healthy/none
                             final hasNormal = preds.any((p) {
                               final cls = (p['class'] ?? '')
                                   .toString()
@@ -1377,7 +1481,6 @@ class _InspectionPageState extends State<InspectionPage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // รูป
                                   ClipRRect(
                                     borderRadius: const BorderRadius.only(
                                       topLeft: Radius.circular(12),
@@ -1400,7 +1503,6 @@ class _InspectionPageState extends State<InspectionPage> {
                                       ),
                                     ),
                                   ),
-                                  // รายการ preds
                                   Padding(
                                     padding: const EdgeInsets.all(8.0),
                                     child: Column(
@@ -1449,7 +1551,7 @@ class _InspectionPageState extends State<InspectionPage> {
                                                       color: Colors.green[800],
                                                       fontSize: 12,
                                                       fontWeight:
-                                                          FontWeight.w600,
+                                                          FontWeight.w700,
                                                     ),
                                                     overflow:
                                                         TextOverflow.ellipsis,
@@ -1469,28 +1571,48 @@ class _InspectionPageState extends State<InspectionPage> {
                                         if (preds.isNotEmpty)
                                           ...preds.map((p) {
                                             final cls = '${p['class'] ?? '-'}';
-                                            final conf = _formatConf(
-                                              p['confidence'],
-                                            );
-                                            return Row(
-                                              children: [
-                                                const Icon(
-                                                  Icons.check_circle,
-                                                  size: 14,
-                                                  color: Colors.green,
-                                                ),
-                                                const SizedBox(width: 6),
-                                                Expanded(
-                                                  child: Text(
-                                                    '$cls • $conf',
-                                                    style: const TextStyle(
-                                                      fontSize: 12,
-                                                    ),
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
+                                            // ไม่แสดงเปอร์เซ็นต์ความเชื่อมั่นแล้ว
+                                            return Container(
+                                              margin: const EdgeInsets.only(
+                                                bottom: 4,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 8,
+                                                    vertical: 6,
                                                   ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.green[50],
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                border: Border.all(
+                                                  color: Colors.green[200]!,
                                                 ),
-                                              ],
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  const Icon(
+                                                    Icons.check_circle,
+                                                    size: 16,
+                                                    color: Colors.green,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Expanded(
+                                                    child: Text(
+                                                      cls,
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color:
+                                                            Colors.green[800],
+                                                      ),
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
                                             );
                                           }),
                                       ],
@@ -1505,7 +1627,7 @@ class _InspectionPageState extends State<InspectionPage> {
                   ),
                 ),
 
-              // Results (findings) — สรุปรวมรายรอบ
+              // สรุปตามธาตุ
               if (_detail != null)
                 _buildStyledCard(
                   child: Column(
@@ -1552,10 +1674,6 @@ class _InspectionPageState extends State<InspectionPage> {
                             final m = raw as Map<String, dynamic>;
                             final code = m['nutrient_code'] ?? m['code'] ?? '-';
                             final sev = m['severity'] ?? '-';
-                            final conf =
-                                (m['confidence'] ?? m['confidence_pct'])
-                                    ?.toString() ??
-                                '-';
 
                             Color severityColor = Colors.orange;
                             IconData severityIcon = Icons.eco_outlined;
@@ -1569,7 +1687,7 @@ class _InspectionPageState extends State<InspectionPage> {
                                 severityIcon = Icons.warning_outlined;
                                 break;
                               case 'mild':
-                                severityColor = Colors.yellowAccent;
+                                severityColor = Colors.yellow;
                                 severityIcon = Icons.info_outline;
                                 break;
                             }
@@ -1602,62 +1720,15 @@ class _InspectionPageState extends State<InspectionPage> {
                                     color: severityColor,
                                   ),
                                 ),
-                                subtitle: Text(
-                                  'ความเชื่อมั่น: $conf',
-                                  style: TextStyle(color: Colors.grey[600]),
-                                ),
                               ),
                             );
                           }).toList(),
                         ),
-                      if ((_detail!['warnings'] as List?)?.isNotEmpty ??
-                          false) ...[
-                        const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.yellow[50],
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.yellow[300]!),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.warning,
-                                    color: Colors.yellow[700],
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'คำเตือน/หมายเหตุ:',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.yellow[800],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              ...((_detail!['warnings'] as List).map(
-                                (w) => Padding(
-                                  padding: const EdgeInsets.only(
-                                    left: 32,
-                                    bottom: 4,
-                                  ),
-                                  child: Text('• $w'),
-                                ),
-                              )),
-                            ],
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                 ),
 
-              // Recommendations
+              // คำแนะนำปุ๋ย: แสดง code + name_th + description
               if (_inspectionId != null)
                 _buildStyledCard(
                   child: Column(
@@ -1696,21 +1767,7 @@ class _InspectionPageState extends State<InspectionPage> {
                       if (!_recsLoading)
                         Builder(
                           builder: (_) {
-                            // ✅ แสดงเฉพาะแถวที่มีข้อมูลปุ๋ย/สูตร
-                            final filtered = _recs.where((r) {
-                              final fid = r['fertilizer_id'];
-                              final fname = (r['fert_name'] ?? '')
-                                  .toString()
-                                  .trim();
-                              final form = (r['formulation'] ?? '')
-                                  .toString()
-                                  .trim();
-                              return (fid != null && '$fid'.isNotEmpty) ||
-                                  (fname.isNotEmpty) ||
-                                  (form.isNotEmpty);
-                            }).toList();
-
-                            if (filtered.isEmpty) {
+                            if (_recs.isEmpty) {
                               return Container(
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
@@ -1725,136 +1782,17 @@ class _InspectionPageState extends State<InspectionPage> {
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
-                                      '— ยังไม่มีคำแนะนำ (ที่ผูกกับปุ๋ยในระบบ/มีสูตร) —',
+                                      '— ยังไม่มีคำแนะนำจากรอบนี้ —',
                                       style: TextStyle(color: Colors.grey[600]),
                                     ),
                                   ],
                                 ),
                               );
                             }
-
-                            return Column(
-                              children: filtered.map((r) {
-                                final id =
-                                    (r['id'] ??
-                                        r['recommendation_id'] ??
-                                        r['rec_id']) ??
-                                    0;
-                                final nutrient =
-                                    r['nutrient_code'] ?? r['nutrient'] ?? '-';
-
-                                final product =
-                                    (r['fertilizer'] ??
-                                            r['product_name'] ??
-                                            r['fert_name'] ??
-                                            '')
-                                        .toString()
-                                        .trim();
-
-                                final formulation = (r['formulation'] ?? '')
-                                    .toString()
-                                    .trim();
-
-                                // ถ้าชื่อมีและสูตรมี → "ชื่อ (สูตร)"; ถ้าชื่อว่างแต่มีสูตร → ใช้สูตรแทน
-                                final productLine = product.isNotEmpty
-                                    ? (formulation.isNotEmpty
-                                          ? '$product ($formulation)'
-                                          : product)
-                                    : (formulation.isNotEmpty
-                                          ? formulation
-                                          : '-');
-
-                                final dose =
-                                    (r['dosage'] ??
-                                            r['dose'] ??
-                                            r['rate_per_area'])
-                                        ?.toString()
-                                        .trim() ??
-                                    '';
-                                final unit = (r['unit'] ?? '')
-                                    .toString()
-                                    .trim();
-                                final method = (r['application_method'] ?? '')
-                                    .toString()
-                                    .trim();
-
-                                final status = (r['status'] ?? 'suggested')
-                                    .toString();
-                                Color badgeColor;
-                                IconData statusIcon;
-                                switch (status) {
-                                  case 'applied':
-                                    badgeColor = Colors.green;
-                                    statusIcon = Icons.check_circle;
-                                    break;
-                                  case 'skipped':
-                                    badgeColor = Colors.orange;
-                                    statusIcon = Icons.skip_next;
-                                    break;
-                                  default:
-                                    badgeColor = Colors.blueGrey;
-                                    statusIcon = Icons.pending;
-                                }
-
-                                final hasDose =
-                                    dose.isNotEmpty &&
-                                    dose != '-' &&
-                                    dose.toLowerCase() != 'null';
-                                final doseLine = hasDose
-                                    ? (unit.isNotEmpty
-                                          ? 'อัตรา: $dose $unit'
-                                          : 'อัตรา: $dose')
-                                    : null;
-
-                                final note =
-                                    (r['note'] ??
-                                            r['notes'] ??
-                                            r['recommendation_text'] ??
-                                            '')
-                                        .toString()
-                                        .trim();
-
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                      color: Colors.grey[300]!,
-                                    ),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: ListTile(
-                                    leading: Icon(
-                                      statusIcon,
-                                      color: badgeColor,
-                                    ),
-                                    title: Text(
-                                      '$nutrient • $productLine', // ⬅️ แสดงสูตรใน title
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    subtitle: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        if (doseLine != null) Text(doseLine),
-                                        if (method.isNotEmpty)
-                                          Text('วิธีใส่: $method'),
-                                        if (note.isNotEmpty)
-                                          Text(
-                                            note,
-                                            style: TextStyle(
-                                              color: Colors.grey[600],
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                    trailing: const SizedBox.shrink(),
-                                  ),
-                                );
-                              }).toList(),
-                            );
+                            final tiles = _recs
+                                .map((e) => _buildRecTile(e))
+                                .toList();
+                            return Column(children: tiles);
                           },
                         ),
                     ],

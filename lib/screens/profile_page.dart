@@ -244,8 +244,6 @@ class _ProfilePageState extends State<ProfilePage> {
               SizedBox(height: isLargeScreen ? 32 : 24),
               _buildProfileInfoCards(u, isLargeScreen),
               SizedBox(height: isLargeScreen ? 32 : 24),
-              _buildTokenInfoCard(isLargeScreen),
-              SizedBox(height: isLargeScreen ? 40 : 32),
               _buildActionButtons(isLargeScreen),
             ],
           ),
@@ -430,68 +428,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     fontSize: isLargeScreen ? 18 : 16,
                     fontWeight: FontWeight.w600,
                     color: Colors.grey[800],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTokenInfoCard(bool isLargeScreen) {
-    final remainingDays = AuthApiService.getTokenRemainingDays();
-    final isExpiringSoon = remainingDays <= 7;
-
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(isLargeScreen ? 20 : 16),
-      decoration: BoxDecoration(
-        color: isExpiringSoon ? Colors.red[50] : Colors.orange[50],
-        borderRadius: BorderRadius.circular(isLargeScreen ? 16 : 12),
-        border: Border.all(
-          color: isExpiringSoon ? Colors.red[200]! : Colors.orange[200]!,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: EdgeInsets.all(isLargeScreen ? 12 : 10),
-            decoration: BoxDecoration(
-              color: isExpiringSoon ? Colors.red[100] : Colors.orange[100],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              isExpiringSoon ? Icons.warning : Icons.access_time,
-              color: isExpiringSoon ? Colors.red[700] : Colors.orange[700],
-              size: isLargeScreen ? 24 : 20,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'สถานะการเข้าสู่ระบบ',
-                  style: TextStyle(
-                    fontSize: isLargeScreen ? 14 : 12,
-                    color: Colors.grey[600],
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  remainingDays > 0
-                      ? 'หมดอายุใน $remainingDays วัน'
-                      : 'หมดอายุแล้ว',
-                  style: TextStyle(
-                    fontSize: isLargeScreen ? 18 : 16,
-                    fontWeight: FontWeight.w600,
-                    color: isExpiringSoon
-                        ? Colors.red[700]
-                        : Colors.orange[700],
                   ),
                 ),
               ],
